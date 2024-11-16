@@ -1,5 +1,5 @@
-version: '3.8'
-
+---
+# version: '3.8'
 services:
   pastiepie:
     build:
@@ -9,14 +9,14 @@ services:
     ports:
       - "8080:8080"  # Expose internal app port to external
     environment:
-      MASTER_KEY: "${MASTER_KEY}"       # Secure 32-byte key for encrypting the AES key
+      MASTER_KEY: "${MASTER_KEY}"
       LOG_LEVEL: "${LOG_LEVEL}"         # Logging level (e.g., info, debug)
       DB_PATH: "/root/data"             # Path to the SQLite database
       PORT: "8080"                      # Port the application listens on
     volumes:
       - ./data:/root/data               # Persistent storage for database files
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf  # Custom NGINX configuration
-      - ./supervisord.conf:/etc/supervisord.conf  # Custom Supervisor configuration
+      - ./supervisord.conf:/etc/supervisord.conf  # Custom Supervisor
       - ./templates:/root/templates    # Templates folder for HTML files
       - ./static:/root/static          # Static files folder
     restart: unless-stopped

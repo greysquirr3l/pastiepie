@@ -1,4 +1,5 @@
-log_level: "info"       # Log level (e.g., "debug", "info", "warn", "error")
+---
+log_level: "info" #e.g., "debug", "info", "warn", "error")
 
 # AES encryption key from Railway environment variable
 aes_key: "${AES_KEY}"  # Environment variable for the encryption key

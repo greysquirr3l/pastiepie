@@ -91,14 +91,19 @@ func initConfig() {
 	config.DBPath = viper.GetString("db_path")
 	config.Port = viper.GetString("port")
 
+	log.Printf("Config values: LogLevel=%s, DBPath=%s, Port=%s", config.LogLevel, config.DBPath, config.Port)
+
 	masterKey := os.Getenv("MASTER_KEY")
 	if len(masterKey) != 32 {
 		log.Fatalf("MASTER_KEY must be 32 bytes for AES-256 encryption. Current length: %d", len(masterKey))
 	}
 
+	log.Println("Verifying AES key in database...")
 	var storedKey AppConfig
 	result := db.First(&storedKey, "key_id = ?", "aes_key")
 	if errors.Is(result.Error, gorm.ErrRecordNotFound) {
+		log.Println("No AES key found, generating a new one...")
+
 		newAESKey := GenerateRandomAESKey()
 		encryptedAESKey, err := EncryptAES(newAESKey, masterKey)
 		if err != nil {
@@ -119,6 +124,7 @@ func initConfig() {
 	} else if result.Error != nil {
 		log.Fatalf("Failed to query database for AES key: %v", result.Error)
 	} else {
+		log.Println("AES key found in database. Decrypting...")
 		decryptedAESKey, err := DecryptAES(storedKey.EncryptedAESKey, masterKey)
 		if err != nil {
 			log.Fatalf("Failed to decrypt stored AES key: %v", err)
@@ -126,12 +132,14 @@ func initConfig() {
 		config.AESKey = decryptedAESKey
 		log.Println("Loaded AES key from database.")
 	}
-
-	log.Printf("Configuration loaded: LogLevel=%s, DBPath=%s, Port=%s", config.LogLevel, config.DBPath, config.Port)
 }
 
 func initDatabase() {
 	log.Println("Initializing database...")
+
+	if config.DBPath == "" {
+		log.Fatalf("Database path is empty. Check your config file or environment variables.")
+	}
 
 	var err error
 	if _, err := os.Stat(config.DBPath); os.IsNotExist(err) {
@@ -154,11 +162,22 @@ func initDatabase() {
 }
 
 func startExpiredPastiesCleanup(interval time.Duration) {
+	log.Printf("Starting expired pasties cleanup routine. Interval: %s", interval)
+
+	// Create a ticker to trigger cleanup at the specified interval
 	ticker := time.NewTicker(interval)
+
 	go func() {
 		for range ticker.C {
 			log.Println("Running cleanup for expired pasties...")
-			db.Where("expires_at <= ?", time.Now()).Delete(&Pastie{})
+
+			// Delete expired pasties from the database
+			err := db.Where("expires_at <= ?", time.Now()).Delete(&Pastie{}).Error
+			if err != nil {
+				log.Printf("Failed to clean up expired pasties: %v", err)
+			} else {
+				log.Println("Expired pasties cleanup completed successfully.")
+			}
 		}
 	}()
 }
