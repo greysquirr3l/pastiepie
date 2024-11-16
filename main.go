@@ -1,4 +1,3 @@
-// PastiePie 1.1
 package main
 
 import (
@@ -10,7 +9,7 @@ import (
 	"fmt"
 	"html"
 	"html/template"
-	"io"
+	"log"
 	"net/http"
 	"os"
 	"sync"
@@ -19,22 +18,26 @@ import (
 	"github.com/glebarez/sqlite"
 	"github.com/gorilla/handlers"
 	"github.com/gorilla/mux"
-	"github.com/sirupsen/logrus"
 	"github.com/spf13/viper"
-	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
 )
 
 var db *gorm.DB
-var log = logrus.New()
 var configLock sync.RWMutex
 var config Config
 
 // Config struct to store global settings
 type Config struct {
-	LogLevel string `mapstructure:"log_level"`
-	AESKey   string `mapstructure:"aes_key"`
-	DBPath   string `mapstructure:"db_path"`
+	LogLevel string
+	AESKey   string
+	DBPath   string
+	Port     string
+}
+
+// AppConfig struct to store application-wide configurations in the database
+type AppConfig struct {
+	KeyID           string `gorm:"primary_key"`
+	EncryptedAESKey string
 }
 
 // Pastie struct to store each pastie
@@ -55,82 +58,88 @@ func main() {
 		}
 	}()
 
-	log.Info("Starting PastiePie application...")
-
 	initConfig()
-	initLogging()
 	initDatabase()
 	defer func() {
 		sqlDB, _ := db.DB()
-		log.Info("Closing database connection.")
 		sqlDB.Close()
 	}()
 
 	// Start cleanup routine for expired pasties
-	log.Info("Initializing expired pasties cleanup routine.")
 	startExpiredPastiesCleanup(10 * time.Minute)
-
-	// Get port from environment variable, default to 8081
-	port := os.Getenv("PORT")
-	if port == "" {
-		port = "8081" // Default to port 8081
-		log.Warn("PORT environment variable not set. Defaulting to 8081.")
-	} else {
-		log.Infof("Using port from environment variable: %s", port)
-	}
 
 	// Start the HTTP server
 	r := mux.NewRouter()
 	r.HandleFunc("/", serveCreateForm).Methods("GET")
 	r.HandleFunc("/pastie", createPaste).Methods("POST")
 	r.HandleFunc("/pastie/{id}", getPaste).Methods("GET", "POST")
-	r.HandleFunc("/admin/pasties", adminPasties).Methods("GET")
-	r.HandleFunc("/healthz", healthCheck).Methods("GET")
+	r.HandleFunc("/admin/pasties", adminPasties).Methods("GET") // Admin page endpoint
+	r.HandleFunc("/healthz", healthCheck).Methods("GET")        // Healthcheck endpoint
 	r.PathPrefix("/static/").Handler(http.StripPrefix("/static/", http.FileServer(http.Dir("./static/"))))
 
-	log.Infof("PastiePie server is starting on port %s...", port)
-	if err := http.ListenAndServe(":"+port, handlers.CORS(handlers.AllowedOrigins([]string{"*"}))(r)); err != nil {
+	log.Printf("PastiePie server starting on port %s", config.Port)
+	if err := http.ListenAndServe(":"+config.Port, handlers.CORS(handlers.AllowedOrigins([]string{"*"}))(r)); err != nil {
 		log.Fatalf("Failed to start HTTP server: %v", err)
 	}
 }
 
 func initConfig() {
-	log.Info("Initializing configuration...")
-	viper.SetConfigName("config")
-	viper.SetConfigType("yml")
-	viper.AddConfigPath(".")
+	viper.SetConfigFile("/root/config.yaml")
+	viper.SetConfigType("yaml")
 
 	if err := viper.ReadInConfig(); err != nil {
 		log.Fatalf("Error reading config file: %v", err)
 	}
 
-	if err := viper.Unmarshal(&config); err != nil {
-		log.Fatalf("Unable to decode config: %v", err)
+	config.LogLevel = viper.GetString("log_level")
+	config.DBPath = viper.GetString("db_path")
+	config.Port = viper.GetString("port")
+
+	masterKey := os.Getenv("MASTER_KEY")
+	if len(masterKey) != 32 {
+		log.Fatalf("MASTER_KEY must be 32 bytes for AES-256 encryption. Current length: %d", len(masterKey))
 	}
 
-	if len(config.AESKey) != 32 {
-		log.Fatalf("AES key must be 32 bytes for AES-256 encryption. Current length: %d", len(config.AESKey))
-	}
-	log.Info("Configuration loaded successfully.")
-}
+	var storedKey AppConfig
+	result := db.First(&storedKey, "key_id = ?", "aes_key")
+	if errors.Is(result.Error, gorm.ErrRecordNotFound) {
+		// Generate and store a new AES key
+		newAESKey := GenerateRandomAESKey()
+		encryptedAESKey, err := EncryptAES(newAESKey, masterKey)
+		if err != nil {
+			log.Fatalf("Failed to encrypt AES key: %v", err)
+		}
 
-func initLogging() {
-	log.Info("Setting up logging...")
-	log.SetFormatter(&logrus.TextFormatter{FullTimestamp: true})
-	level, err := logrus.ParseLevel(config.LogLevel)
-	if err != nil {
-		log.Warnf("Invalid log level in config (%s). Defaulting to 'info'.", config.LogLevel)
-		level = logrus.InfoLevel
+		storedKey = AppConfig{
+			KeyID:           "aes_key",
+			EncryptedAESKey: encryptedAESKey,
+		}
+
+		if err := db.Create(&storedKey).Error; err != nil {
+			log.Fatalf("Failed to store AES key in database: %v", err)
+		}
+
+		config.AESKey = newAESKey
+		log.Println("Generated and stored new AES key.")
+	} else if result.Error != nil {
+		log.Fatalf("Failed to query database for AES key: %v", result.Error)
+	} else {
+		// Decrypt the existing AES key
+		decryptedAESKey, err := DecryptAES(storedKey.EncryptedAESKey, masterKey)
+		if err != nil {
+			log.Fatalf("Failed to decrypt AES key: %v", err)
+		}
+
+		config.AESKey = decryptedAESKey
+		log.Println("Loaded AES key from database.")
 	}
-	log.SetLevel(level)
-	log.Infof("Log level set to: %s", log.GetLevel())
+
+	log.Printf("Configuration loaded: LogLevel=%s, DBPath=%s, Port=%s", config.LogLevel, config.DBPath, config.Port)
 }
 
 func initDatabase() {
-	log.Info("Initializing database...")
 	var err error
 	if _, err := os.Stat(config.DBPath); os.IsNotExist(err) {
-		log.Warnf("Database path does not exist: %s. Creating directory...", config.DBPath)
 		if err := os.MkdirAll(config.DBPath, os.ModePerm); err != nil {
 			log.Fatalf("Failed to create data directory: %v", err)
 		}
@@ -140,24 +149,19 @@ func initDatabase() {
 	if err != nil {
 		log.Fatalf("Failed to connect to database: %v", err)
 	}
-	if err := db.AutoMigrate(&Pastie{}); err != nil {
+	if err := db.AutoMigrate(&Pastie{}, &AppConfig{}); err != nil {
 		log.Fatalf("Failed to migrate database: %v", err)
 	}
-	log.Info("Database initialized successfully.")
 }
 
 func healthCheck(w http.ResponseWriter, r *http.Request) {
-	log.Debug("Health check endpoint hit.")
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte("OK"))
-	log.Debug("Health check responded with 200 OK.")
 }
 
 func serveCreateForm(w http.ResponseWriter, r *http.Request) {
-	log.Debug("Serving create form.")
 	tmpl, err := template.ParseFiles("templates/form.html")
 	if err != nil {
-		log.Errorf("Error loading form template: %v", err)
 		http.Error(w, "Error loading form template", http.StatusInternalServerError)
 		return
 	}
@@ -166,42 +170,14 @@ func serveCreateForm(w http.ResponseWriter, r *http.Request) {
 
 func createPaste(w http.ResponseWriter, r *http.Request) {
 	content := r.FormValue("content")
-	password := r.FormValue("password")
-	viewOnce := r.FormValue("view_once") == "true"
-	expiration := r.FormValue("expiration")
-
-	log.Infof("Creating new pastie. ViewOnce: %v, Expiration: %s", viewOnce, expiration)
-
 	if content == "" {
-		log.Warn("Failed to create pastie: Content cannot be empty.")
 		http.Error(w, "Content cannot be empty", http.StatusBadRequest)
 		return
-	}
-
-	var expiresAt time.Time
-	if expiration == "forever" {
-		expiresAt = time.Time{}
-	} else {
-		switch expiration {
-		case "5min":
-			expiresAt = time.Now().Add(5 * time.Minute)
-		case "30min":
-			expiresAt = time.Now().Add(30 * time.Minute)
-		case "1hour":
-			expiresAt = time.Now().Add(1 * time.Hour)
-		case "1day":
-			expiresAt = time.Now().Add(24 * time.Hour)
-		case "7days":
-			expiresAt = time.Now().Add(7 * 24 * time.Hour)
-		default:
-			expiresAt = time.Now().Add(24 * time.Hour)
-		}
 	}
 
 	sanitizedContent := html.EscapeString(content)
 	encryptedContent, err := encrypt(sanitizedContent, config.AESKey)
 	if err != nil {
-		log.Errorf("Failed to encrypt content: %v", err)
 		http.Error(w, "Failed to encrypt content", http.StatusInternalServerError)
 		return
 	}
@@ -210,142 +186,25 @@ func createPaste(w http.ResponseWriter, r *http.Request) {
 		ID:        generateID(),
 		Content:   encryptedContent,
 		CreatedAt: time.Now(),
-		ExpiresAt: expiresAt,
-		ViewOnce:  viewOnce,
-	}
-
-	if password != "" {
-		hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
-		if err != nil {
-			log.Errorf("Failed to hash password: %v", err)
-			http.Error(w, "Failed to hash password", http.StatusInternalServerError)
-			return
-		}
-		pastie.PasswordHash = string(hash)
+		ExpiresAt: time.Now().Add(24 * time.Hour), // Default expiration
 	}
 
 	go func() {
 		if err := db.Create(&pastie).Error; err != nil {
-			log.Errorf("Failed to save pastie: %v", err)
-		} else {
-			log.Infof("Successfully created pastie with ID: %s, ViewOnce: %v", pastie.ID, pastie.ViewOnce)
+			log.Printf("Failed to save pastie: %v", err)
 		}
 	}()
 
-	link := fmt.Sprintf("https://%s/pastie/%s", r.Host, pastie.ID)
-
-	log.Infof("Generated shareable link for pastie: %s", link)
-
-	tmpl, err := template.ParseFiles("templates/share_link.html")
-	if err != nil {
-		log.Errorf("Error loading share link template: %v", err)
-		http.Error(w, "Error loading share link template", http.StatusInternalServerError)
-		return
-	}
-	tmpl.Execute(w, map[string]string{"Link": link, "ViewOnce": fmt.Sprintf("%v", viewOnce)})
-}
-
-func generateID() string {
-	b := make([]byte, 12) // 12 bytes = 96 bits, encoded as base64 becomes 16 characters
-	_, err := rand.Read(b)
-	if err != nil {
-		log.Errorf("Failed to generate random ID: %v", err)
-		return ""
-	}
-	return base64.URLEncoding.EncodeToString(b)
-}
-
-func encrypt(plainText, key string) (string, error) {
-	if len(key) != 32 {
-		return "", errors.New("invalid key size; must be 32 bytes for AES-256")
-	}
-
-	block, err := aes.NewCipher([]byte(key))
-	if err != nil {
-		return "", err
-	}
-
-	cipherText := make([]byte, aes.BlockSize+len(plainText))
-	iv := cipherText[:aes.BlockSize]
-
-	if _, err := io.ReadFull(rand.Reader, iv); err != nil {
-		return "", err
-	}
-
-	stream := cipher.NewCFBEncrypter(block, iv)
-	stream.XORKeyStream(cipherText[aes.BlockSize:], []byte(plainText))
-
-	return base64.URLEncoding.EncodeToString(cipherText), nil
-}
-
-func decrypt(cipherText, key string) (string, error) {
-	if len(key) != 32 {
-		return "", errors.New("invalid key size; must be 32 bytes for AES-256")
-	}
-
-	block, err := aes.NewCipher([]byte(key))
-	if err != nil {
-		return "", err
-	}
-
-	decodedCipherText, _ := base64.URLEncoding.DecodeString(cipherText)
-	if len(decodedCipherText) < aes.BlockSize {
-		return "", errors.New("ciphertext too short")
-	}
-
-	iv := decodedCipherText[:aes.BlockSize]
-	decodedCipherText = decodedCipherText[aes.BlockSize:]
-
-	stream := cipher.NewCFBDecrypter(block, iv)
-	stream.XORKeyStream(decodedCipherText, decodedCipherText)
-
-	return string(decodedCipherText), nil
+	http.Redirect(w, r, fmt.Sprintf("/pastie/%s", pastie.ID), http.StatusSeeOther)
 }
 
 func getPaste(w http.ResponseWriter, r *http.Request) {
-	vars := mux.Vars(r)
-	id := vars["id"]
+	id := mux.Vars(r)["id"]
 
 	var pastie Pastie
 	if err := db.First(&pastie, "id = ?", id).Error; err != nil {
 		http.Error(w, "Pastie not found", http.StatusNotFound)
 		return
-	}
-
-	if !pastie.ExpiresAt.IsZero() && time.Now().After(pastie.ExpiresAt) {
-		log.Infof("Deleting expired pastie with ID: %s", pastie.ID)
-		db.Delete(&pastie)
-		http.Error(w, "This pastie has expired.", http.StatusGone)
-		return
-	}
-
-	if pastie.ViewOnce && pastie.Viewed {
-		http.Error(w, "Pastie not found", http.StatusNotFound)
-		return
-	}
-
-	if pastie.PasswordHash != "" {
-		if r.Method == http.MethodGet {
-			tmpl, err := template.ParseFiles("templates/password_prompt.html")
-			if err != nil {
-				http.Error(w, "Error loading password prompt template", http.StatusInternalServerError)
-				return
-			}
-			tmpl.Execute(w, map[string]string{"PastieID": id})
-			return
-		}
-
-		if r.Method == http.MethodPost {
-			password := r.FormValue("password")
-			if password == "" {
-				http.Error(w, "Password is required to view this pastie", http.StatusUnauthorized)
-				return
-			}
-			if err := bcrypt.CompareHashAndPassword([]byte(pastie.PasswordHash), []byte(password)); err != nil {
-				http.Error(w, "Invalid password", http.StatusUnauthorized)
-				return
-			}
-		}
 	}
 
 	decryptedContent, err := decrypt(pastie.Content, config.AESKey)
@@ -354,24 +213,9 @@ func getPaste(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if pastie.ViewOnce {
-		log.Infof("Viewing and deleting view-once pastie with ID: %s", pastie.ID)
-		pastie.Viewed = true
-		if err := db.Delete(&pastie).Error; err != nil {
-			log.Errorf("Failed to delete view-once pastie: %v", err)
-			http.Error(w, "Failed to delete pastie after viewing", http.StatusInternalServerError)
-			return
-		}
-	} else {
-		pastie.Viewed = true
-		if err := db.Save(&pastie).Error; err != nil {
-			log.Errorf("Failed to update pastie as viewed: %v", err)
-		}
-	}
-
 	tmpl, err := template.ParseFiles("templates/view_pastie.html")
 	if err != nil {
-		http.Error(w, "Error loading view pastie template", http.StatusInternalServerError)
+		http.Error(w, "Error loading template", http.StatusInternalServerError)
 		return
 	}
 	tmpl.Execute(w, map[string]string{"Content": decryptedContent})
@@ -396,13 +240,104 @@ func startExpiredPastiesCleanup(interval time.Duration) {
 	ticker := time.NewTicker(interval)
 	go func() {
 		for range ticker.C {
-			log.Info("Running expired pasties cleanup...")
-			now := time.Now()
-			if err := db.Where("expires_at <= ?", now).Delete(&Pastie{}).Error; err != nil {
-				log.Errorf("Failed to clean up expired pasties: %v", err)
-			} else {
-				log.Info("Expired pasties cleanup completed.")
-			}
+			log.Println("Running cleanup for expired pasties...")
+			db.Where("expires_at <= ?", time.Now()).Delete(&Pastie{})
 		}
 	}()
+}
+
+func encrypt(plainText, key string) (string, error) {
+	block, err := aes.NewCipher([]byte(key))
+	if err != nil {
+		return "", err
+	}
+	cipherText := make([]byte, aes.BlockSize+len(plainText))
+	iv := cipherText[:aes.BlockSize]
+	_, err = rand.Read(iv)
+	if err != nil {
+		return "", err
+	}
+	stream := cipher.NewCFBEncrypter(block, iv)
+	stream.XORKeyStream(cipherText[aes.BlockSize:], []byte(plainText))
+	return base64.StdEncoding.EncodeToString(cipherText), nil
+}
+
+func decrypt(cipherText, key string) (string, error) {
+	block, err := aes.NewCipher([]byte(key))
+	if err != nil {
+		return "", err
+	}
+	data, err := base64.StdEncoding.DecodeString(cipherText)
+	if err != nil {
+		return "", err
+	}
+	iv := data[:aes.BlockSize]
+	data = data[aes.BlockSize:]
+	stream := cipher.NewCFBDecrypter(block, iv)
+	stream.XORKeyStream(data, data)
+	return string(data), nil
+}
+
+func generateID() string {
+	b := make([]byte, 12)
+	_, err := rand.Read(b)
+	if err != nil {
+		log.Printf("Failed to generate ID: %v", err)
+	}
+	return base64.URLEncoding.EncodeToString(b)
+}
+
+// EncryptAES encrypts plaintext using a given master key
+func EncryptAES(plaintext string, masterKey string) (string, error) {
+	block, err := aes.NewCipher([]byte(masterKey))
+	if err != nil {
+		return "", err
+	}
+
+	plaintextBytes := []byte(plaintext)
+	ciphertext := make([]byte, aes.BlockSize+len(plaintextBytes))
+	iv := ciphertext[:aes.BlockSize]
+
+	if _, err := rand.Read(iv); err != nil {
+		return "", err
+	}
+
+	stream := cipher.NewCFBEncrypter(block, iv)
+	stream.XORKeyStream(ciphertext[aes.BlockSize:], plaintextBytes)
+
+	return base64.StdEncoding.EncodeToString(ciphertext), nil
+}
+
+// DecryptAES decrypts ciphertext using a given master key
+func DecryptAES(ciphertext string, masterKey string) (string, error) {
+	block, err := aes.NewCipher([]byte(masterKey))
+	if err != nil {
+		return "", err
+	}
+
+	ciphertextBytes, err := base64.StdEncoding.DecodeString(ciphertext)
+	if err != nil {
+		return "", err
+	}
+
+	if len(ciphertextBytes) < aes.BlockSize {
+		return "", errors.New("ciphertext too short")
+	}
+
+	iv := ciphertextBytes[:aes.BlockSize]
+	ciphertextBytes = ciphertextBytes[aes.BlockSize:]
+
+	stream := cipher.NewCFBDecrypter(block, iv)
+	stream.XORKeyStream(ciphertextBytes, ciphertextBytes)
+
+	return string(ciphertextBytes), nil
+}
+
+// GenerateRandomAESKey generates a random 32-byte AES key
+func GenerateRandomAESKey() string {
+	key := make([]byte, 32)
+	if _, err := rand.Read(key); err != nil {
+		log.Fatalf("Failed to generate AES key: %v", err)
+	}
+	return base64.StdEncoding.EncodeToString(key)
 }
