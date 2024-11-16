@@ -1,5 +1,5 @@
 # Stage 1: Build the Go binary
-FROM golang:1.23 AS builder
+FROM golang:1.20 AS builder
 
 # Set the Current Working Directory inside the container
 WORKDIR /app
@@ -14,7 +14,7 @@ RUN go mod download
 # Copy the source code
 COPY . .
 
-# Set appropriate architecture and build the Go app (statically linked for Alpine)
+# Build the Go app (statically linked for Alpine)
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -a -installsuffix cgo -o pastiepie
 
 # Stage 2: Create the final image
@@ -39,15 +39,14 @@ COPY nginx/nginx.conf /etc/nginx/nginx.conf
 # Copy Supervisor configuration
 COPY supervisord.conf /etc/supervisord.conf
 
+# Add default config.yml for the application
+COPY config.yml /root/config.yml
+
 # Create the data directory for SQLite
 RUN mkdir -p /root/data
 
 # Ensure the binary has executable permissions
 RUN chmod +x /root/pastiepie
-
-# Add default config.yml for PastiePie
-COPY config.yml /root/config.yml
-RUN chmod 644 /root/config.yml
 
 # Expose port 80 for HTTP traffic (Nginx)
 EXPOSE 80
