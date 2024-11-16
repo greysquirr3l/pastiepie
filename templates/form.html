@@ -10,39 +10,54 @@
             font-family: 'Sour Gummy', sans-serif;
         }
     </style>
-    <title>Create a New Pastie</title>
+    <title>Create Pastie</title>
+    <script>
+        function toggleExpiration() {
+            const viewOnceCheckbox = document.getElementById("view_once");
+            const expirationDropdown = document.getElementById("expiration");
+
+            if (viewOnceCheckbox.checked) {
+                expirationDropdown.disabled = true;
+                expirationDropdown.value = "forever"; // Set a default value when disabled
+            } else {
+                expirationDropdown.disabled = false;
+            }
+        }
+
+        document.addEventListener("DOMContentLoaded", function() {
+            // Set up event listener for view-once checkbox
+            document.getElementById("view_once").addEventListener("change", toggleExpiration);
+        });
+    </script>
 </head>
 <body>
     <div class="container mt-5">
-        <div class="text-center">
-            <img src="/static/images/whispering_pie_logo.png" alt="PastiePie Logo" style="width: 150px;">
-        </div>
-        <h1 class="mt-4">Create a New Pastie</h1>
-        <form action="/pastie" method="POST">
-            <div class="form-group">
-                <label for="content">Content:</label>
-                <textarea class="form-control" id="content" name="content" rows="5" required></textarea>
+        <h1>Create a New Pastie</h1>
+        <form action="/pastie" method="post">
+            <div class="mb-3">
+                <label for="content" class="form-label">Content</label>
+                <textarea id="content" name="content" class="form-control" rows="5" required></textarea>
             </div>
-            <div class="form-group">
-                <label for="password">Password (optional):</label>
-                <input type="password" class="form-control" id="password" name="password">
+            <div class="mb-3">
+                <label for="password" class="form-label">Password (optional)</label>
+                <input type="password" id="password" name="password" class="form-control">
             </div>
-            <div class="form-group">
-                <label for="expiration">Expiration:</label>
-                <select class="form-control" id="expiration" name="expiration">
+            <div class="form-check mb-3">
+                <input type="checkbox" class="form-check-input" id="view_once" name="view_once" value="true">
+                <label for="view_once" class="form-check-label">View Once</label>
+            </div>
+            <div class="mb-3">
+                <label for="expiration" class="form-label">Expiration</label>
+                <select id="expiration" name="expiration" class="form-select">
+                    <option value="forever">Forever</option>
                     <option value="5min">5 Minutes</option>
                     <option value="30min">30 Minutes</option>
                     <option value="1hour">1 Hour</option>
-                    <option value="1day" selected>1 Day</option>
+                    <option value="1day">1 Day</option>
                     <option value="7days">7 Days</option>
-                    <option value="forever">Forever</option>
                 </select>
             </div>
-            <div class="form-check">
-                <input type="checkbox" class="form-check-input" id="view_once" name="view_once">
-                <label class="form-check-label" for="view_once">View only once</label>
-            </div>
-            <button type="submit" class="btn btn-primary mt-3">Create Pastie</button>
+            <button type="submit" class="btn btn-primary">Create Pastie</button>
         </form>
     </div>
     <script src="/static/js/bootstrap.bundle.min.js"></script>

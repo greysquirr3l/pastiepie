@@ -214,17 +214,17 @@ func getPaste(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Check if the pastie is view-once and already viewed
+	if pastie.ViewOnce && pastie.Viewed {
+		http.Error(w, "Pastie not found", http.StatusNotFound)
+		return
+	}
+
 	// Check if the pastie has expired
 	if !pastie.ExpiresAt.IsZero() && time.Now().After(pastie.ExpiresAt) {
 		// Remove expired pastie
 		db.Delete(&pastie)
 		http.Error(w, "This pastie has expired.", http.StatusGone)
-		return
-	}
-
-	// If the pastie is view-once and already viewed, it should not be accessible
-	if pastie.ViewOnce && pastie.Viewed {
-		http.Error(w, "Pastie not found", http.StatusNotFound)
 		return
 	}
 
@@ -261,9 +261,9 @@ func getPaste(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// For view-once pasties, mark as viewed and delete immediately
+	// If the pastie is marked as view-once, mark it as viewed and delete it
 	if pastie.ViewOnce {
-		// Mark as viewed and delete in a single transaction
+		// Mark as viewed and delete immediately
 		pastie.Viewed = true
 		if err := db.Save(&pastie).Error; err != nil {
 			log.Errorf("Failed to mark pastie as viewed: %v", err)
@@ -271,17 +271,30 @@ func getPaste(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
+		// Delete the pastie immediately after viewing
 		if err := db.Delete(&pastie).Error; err != nil {
 			log.Errorf("Failed to delete view-once pastie: %v", err)
 			http.Error(w, "Failed to delete pastie after viewing", http.StatusInternalServerError)
 			return
 		}
-	} else {
-		// Update viewed status for non-view-once pasties
-		pastie.Viewed = true
-		if err := db.Save(&pastie).Error; err != nil {
-			log.Errorf("Failed to update pastie as viewed: %v", err)
+
+		// Render the pastie content and notify the user that it has been deleted
+		tmpl, err := template.ParseFiles("templates/view_pastie.html")
+		if err != nil {
+			http.Error(w, "Error loading view pastie template", http.StatusInternalServerError)
+			return
 		}
+		tmpl.Execute(w, map[string]string{
+			"Content": decryptedContent,
+			"Message": "Note: This pastie was set to be viewable only once and has now been deleted.",
+		})
+		return
+	}
+
+	// For non-view-once pasties, just mark as viewed
+	pastie.Viewed = true
+	if err := db.Save(&pastie).Error; err != nil {
+		log.Errorf("Failed to update pastie as viewed: %v", err)
 	}
 
 	// Render the pastie content
