@@ -14,14 +14,14 @@ RUN go mod download
 # Copy the source code
 COPY . .
 
-# Set appropriate architecture and build the Go app
+# Set appropriate architecture and build the Go app (statically linked for Alpine)
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -a -installsuffix cgo -o pastiepie
 
 # Stage 2: Create the final image
 FROM alpine:latest
 
-# Install required CA certificates
-RUN apk --no-cache add ca-certificates
+# Install Nginx, Supervisor, and certificates
+RUN apk --no-cache add ca-certificates nginx supervisor
 
 # Set the Current Working Directory inside the container
 WORKDIR /root
@@ -33,14 +33,20 @@ COPY --from=builder /app/pastiepie .
 COPY --from=builder /app/templates ./templates
 COPY --from=builder /app/static ./static
 
+# Copy Nginx configuration
+COPY nginx/nginx.conf /etc/nginx/nginx.conf
+
+# Copy Supervisor configuration
+COPY supervisord.conf /etc/supervisord.conf
+
 # Create the data directory for SQLite
 RUN mkdir -p /root/data
 
 # Ensure the binary has executable permissions
 RUN chmod +x /root/pastiepie
 
-# Expose port 8081 for HTTP traffic
-EXPOSE 8081
+# Expose port 8080 for internal HTTP traffic
+EXPOSE 8080
 
-# Command to run the Go application directly
-CMD ["/root/pastiepie"]
+# Command to run supervisord, which will manage Nginx and the Go application
+CMD ["/usr/bin/supervisord", "-c", "/etc/supervisord.conf"]
