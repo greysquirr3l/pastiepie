@@ -75,8 +75,8 @@ func main() {
 	r.HandleFunc("/healthz", healthCheck).Methods("GET") // Healthcheck endpoint
 	r.PathPrefix("/static/").Handler(http.StripPrefix("/static/", http.FileServer(http.Dir("./static/"))))
 
-	log.Infof("PastiePie server starting at :8080")
-	if err := http.ListenAndServe(":8080", handlers.CORS(handlers.AllowedOrigins([]string{"*"}))(r)); err != nil {
+	log.Infof("PastiePie server starting at :8081")
+	if err := http.ListenAndServe(":8081", handlers.CORS(handlers.AllowedOrigins([]string{"*"}))(r)); err != nil {
 		log.Fatalf("Failed to start HTTP server: %v", err)
 	}
 }
