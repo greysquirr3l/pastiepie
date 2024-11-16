@@ -1,15 +1,10 @@
+// PastiePie 0.6
 package main
 
 import (
-	"crypto/aes"
-	"crypto/cipher"
-	"crypto/rand"
-	"encoding/base64"
-	"errors"
 	"fmt"
 	"html"
 	"html/template"
-	"io"
 	"net/http"
 	"os"
 	"sync"
@@ -19,6 +14,7 @@ import (
 	"github.com/gorilla/handlers"
 	"github.com/gorilla/mux"
 	"github.com/sirupsen/logrus"
+	"github.com/spf13/viper"
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
 )
@@ -26,15 +22,16 @@ import (
 var db *gorm.DB
 var log = logrus.New()
 var configLock sync.RWMutex
+var config Config
 
 // Config struct to store global settings
 type Config struct {
-	LogLevel string
-	DBPath   string
-	AESKey   string
+	LogLevel    string `mapstructure:"log_level"`
+	AESKey      string `mapstructure:"aes_key"`
+	SSLCertPath string `mapstructure:"ssl_cert_path"`
+	SSLKeyPath  string `mapstructure:"ssl_key_path"`
+	DBPath      string `mapstructure:"db_path"`
 }
-
-var config Config
 
 // Pastie struct to store each pastie
 type Pastie struct {
@@ -62,26 +59,43 @@ func main() {
 		sqlDB.Close()
 	}()
 
-	// Set up routes
+	// Start cleanup routine for expired pasties
+	startExpiredPastiesCleanup(10 * time.Minute)
+
+	// Start an HTTP server to redirect to HTTPS
+	go func() {
+		log.Info("HTTP server starting at :8080, redirecting to HTTPS")
+		if err := http.ListenAndServe(":8080", http.HandlerFunc(redirectToHTTPS)); err != nil {
+			log.Fatalf("Failed to start HTTP server: %v", err)
+		}
+	}()
+
+	// Start the HTTPS server
 	r := mux.NewRouter()
 	r.HandleFunc("/", serveCreateForm).Methods("GET")
 	r.HandleFunc("/pastie", createPaste).Methods("POST")
 	r.HandleFunc("/pastie/{id}", getPaste).Methods("GET", "POST")
 	r.HandleFunc("/admin/pasties", adminPasties).Methods("GET")
-	r.HandleFunc("/healthz", healthCheckHandler).Methods("GET")
 	r.PathPrefix("/static/").Handler(http.StripPrefix("/static/", http.FileServer(http.Dir("./static/"))))
 
-	// Start the HTTP server on port 8081
-	log.Info("PastiePie server starting at :8081")
-	if err := http.ListenAndServe(":8081", handlers.ProxyHeaders(r)); err != nil {
-		log.Fatalf("Failed to start server: %v", err)
+	log.Infof("PastiePie server starting at :8443 (HTTPS), cert: %s, key: %s", config.SSLCertPath, config.SSLKeyPath)
+	if err := http.ListenAndServeTLS(":8443", config.SSLCertPath, config.SSLKeyPath, handlers.CORS(handlers.AllowedOrigins([]string{"*"}))(r)); err != nil {
+		log.Fatalf("Failed to start HTTPS server: %v", err)
 	}
 }
 
 func initConfig() {
-	config.LogLevel = os.Getenv("LOG_LEVEL")
-	config.DBPath = os.Getenv("DB_PATH")
-	config.AESKey = os.Getenv("AES_KEY")
+	viper.SetConfigName("config")
+	viper.SetConfigType("yaml")
+	viper.AddConfigPath(".")
+
+	if err := viper.ReadInConfig(); err != nil {
+		log.Fatalf("Error reading config file: %v", err)
+	}
+
+	if err := viper.Unmarshal(&config); err != nil {
+		log.Fatalf("Unable to decode config: %v", err)
+	}
 
 	if len(config.AESKey) != 32 {
 		log.Fatalf("AES key must be 32 bytes for AES-256 encryption. Current length: %d", len(config.AESKey))
@@ -129,6 +143,8 @@ func createPaste(w http.ResponseWriter, r *http.Request) {
 	password := r.FormValue("password")
 	viewOnce := r.FormValue("view_once") == "true"
 	expiration := r.FormValue("expiration")
+
+	log.Infof("Creating new pastie with viewOnce: %v, expiration: %s", viewOnce, expiration) // Debug log
 
 	if content == "" {
 		http.Error(w, "Content cannot be empty", http.StatusBadRequest)
@@ -189,6 +205,8 @@ func createPaste(w http.ResponseWriter, r *http.Request) {
 	go func() {
 		if err := db.Create(&pastie).Error; err != nil {
 			log.Errorf("Failed to save pastie: %v", err)
+		} else {
+			log.Infof("Successfully created pastie with ID: %s, viewOnce: %v", pastie.ID, pastie.ViewOnce)
 		}
 	}()
 
@@ -208,9 +226,16 @@ func getPaste(w http.ResponseWriter, r *http.Request) {
 	id := vars["id"]
 
 	var pastie Pastie
-	// Try to find the pastie by ID
 	if err := db.First(&pastie, "id = ?", id).Error; err != nil {
 		http.Error(w, "Pastie not found", http.StatusNotFound)
+		return
+	}
+
+	// Check if the pastie has expired
+	if !pastie.ExpiresAt.IsZero() && time.Now().After(pastie.ExpiresAt) {
+		log.Infof("Deleting expired pastie with ID: %s", pastie.ID) // Debug log for expired pastie
+		db.Delete(&pastie)
+		http.Error(w, "This pastie has expired.", http.StatusGone)
 		return
 	}
 
@@ -220,18 +245,9 @@ func getPaste(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Check if the pastie has expired
-	if !pastie.ExpiresAt.IsZero() && time.Now().After(pastie.ExpiresAt) {
-		// Remove expired pastie
-		db.Delete(&pastie)
-		http.Error(w, "This pastie has expired.", http.StatusGone)
-		return
-	}
-
 	// Handle password-protected pastie
 	if pastie.PasswordHash != "" {
 		if r.Method == http.MethodGet {
-			// Prompt for password if it's a GET request
 			tmpl, err := template.ParseFiles("templates/password_prompt.html")
 			if err != nil {
 				http.Error(w, "Error loading password prompt template", http.StatusInternalServerError)
@@ -261,43 +277,22 @@ func getPaste(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// If the pastie is marked as view-once, mark it as viewed and delete it
+	// For view-once pasties, mark as viewed and delete immediately
 	if pastie.ViewOnce {
-		// Mark as viewed and delete immediately
+		log.Infof("Viewing and deleting view-once pastie with ID: %s", pastie.ID) // Debug log for view-once
 		pastie.Viewed = true
-		if err := db.Save(&pastie).Error; err != nil {
-			log.Errorf("Failed to mark pastie as viewed: %v", err)
-			http.Error(w, "Failed to update pastie state", http.StatusInternalServerError)
-			return
-		}
-
-		// Delete the pastie immediately after viewing
 		if err := db.Delete(&pastie).Error; err != nil {
 			log.Errorf("Failed to delete view-once pastie: %v", err)
 			http.Error(w, "Failed to delete pastie after viewing", http.StatusInternalServerError)
 			return
 		}
-
-		// Render the pastie content and notify the user that it has been deleted
-		tmpl, err := template.ParseFiles("templates/view_pastie.html")
-		if err != nil {
-			http.Error(w, "Error loading view pastie template", http.StatusInternalServerError)
-			return
+	} else {
+		pastie.Viewed = true
+		if err := db.Save(&pastie).Error; err != nil {
+			log.Errorf("Failed to update pastie as viewed: %v", err)
 		}
-		tmpl.Execute(w, map[string]string{
-			"Content": decryptedContent,
-			"Message": "Note: This pastie was set to be viewable only once and has now been deleted.",
-		})
-		return
 	}
 
-	// For non-view-once pasties, just mark as viewed
-	pastie.Viewed = true
-	if err := db.Save(&pastie).Error; err != nil {
-		log.Errorf("Failed to update pastie as viewed: %v", err)
-	}
-
-	// Render the pastie content
 	tmpl, err := template.ParseFiles("templates/view_pastie.html")
 	if err != nil {
 		http.Error(w, "Error loading view pastie template", http.StatusInternalServerError)
@@ -306,86 +301,17 @@ func getPaste(w http.ResponseWriter, r *http.Request) {
 	tmpl.Execute(w, map[string]string{"Content": decryptedContent})
 }
 
-func adminPasties(w http.ResponseWriter, r *http.Request) {
-	logRequestDetails(r)
-
-	var pasties []Pastie
-	if err := db.Find(&pasties).Error; err != nil {
-		http.Error(w, "Failed to retrieve pasties", http.StatusInternalServerError)
-		return
-	}
-
-	tmpl, err := template.ParseFiles("templates/admin.html")
-	if err != nil {
-		http.Error(w, "Error loading admin template", http.StatusInternalServerError)
-		return
-	}
-
-	tmpl.Execute(w, pasties)
-}
-
-func healthCheckHandler(w http.ResponseWriter, r *http.Request) {
-	logRequestDetails(r)
-	w.WriteHeader(http.StatusOK)
-	fmt.Fprintln(w, "OK")
-}
-
-func logRequestDetails(r *http.Request) {
-	log.Infof("Request Method: %s, Request URL: %s, Request Headers: %v", r.Method, r.URL, r.Header)
-}
-
-func generateID() string {
-	b := make([]byte, 12)
-	_, err := rand.Read(b)
-	if err != nil {
-		log.Errorf("Failed to generate random ID: %v", err)
-	}
-	return base64.URLEncoding.EncodeToString(b)
-}
-
-func encrypt(plainText, key string) (string, error) {
-	if len(key) != 32 {
-		return "", errors.New("invalid key size; must be 32 bytes for AES-256")
-	}
-
-	block, err := aes.NewCipher([]byte(key))
-	if err != nil {
-		return "", err
-	}
-
-	ciphertext := make([]byte, aes.BlockSize+len(plainText))
-	iv := ciphertext[:aes.BlockSize]
-
-	if _, err := io.ReadFull(rand.Reader, iv); err != nil {
-		return "", err
-	}
-
-	stream := cipher.NewCFBEncrypter(block, iv)
-	stream.XORKeyStream(ciphertext[aes.BlockSize:], []byte(plainText))
-
-	return base64.URLEncoding.EncodeToString(ciphertext), nil
-}
-
-func decrypt(cipherText, key string) (string, error) {
-	if len(key) != 32 {
-		return "", errors.New("invalid key size; must be 32 bytes for AES-256")
-	}
-
-	block, err := aes.NewCipher([]byte(key))
-	if err != nil {
-		return "", err
-	}
-
-	ciphertext, _ := base64.URLEncoding.DecodeString(cipherText)
-	if len(ciphertext) < aes.BlockSize {
-		return "", errors.New("ciphertext too short")
-	}
-
-	iv := ciphertext[:aes.BlockSize]
-	ciphertext = ciphertext[aes.BlockSize:]
-
-	stream := cipher.NewCFBDecrypter(block, iv)
-	stream.XORKeyStream(ciphertext, ciphertext)
-
-	return string(ciphertext), nil
+func startExpiredPastiesCleanup(interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	go func() {
+		for range ticker.C {
+			log.Info("Running expired pasties cleanup...")
+			now := time.Now()
+			if err := db.Where("expires_at <= ?", now).Delete(&Pastie{}).Error; err != nil {
+				log.Errorf("Failed to clean up expired pasties: %v", err)
+			} else {
+				log.Info("Expired pasties cleanup completed.")
+			}
+		}
+	}()
 }
