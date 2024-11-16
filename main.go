@@ -1,4 +1,4 @@
-// PastiePie 0.9
+// PastiePie 1.1
 package main
 
 import (
@@ -66,6 +66,12 @@ func main() {
 	// Start cleanup routine for expired pasties
 	startExpiredPastiesCleanup(10 * time.Minute)
 
+	// Get port from environment variable, default to 8081
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "8081" // Default to port 8081 to work with NGINX proxy
+	}
+
 	// Start the HTTP server
 	r := mux.NewRouter()
 	r.HandleFunc("/", serveCreateForm).Methods("GET")
@@ -75,8 +81,8 @@ func main() {
 	r.HandleFunc("/healthz", healthCheck).Methods("GET") // Healthcheck endpoint
 	r.PathPrefix("/static/").Handler(http.StripPrefix("/static/", http.FileServer(http.Dir("./static/"))))
 
-	log.Infof("PastiePie server starting at :8081")
-	if err := http.ListenAndServe(":8081", handlers.CORS(handlers.AllowedOrigins([]string{"*"}))(r)); err != nil {
+	log.Infof("PastiePie server starting at :%s", port)
+	if err := http.ListenAndServe(":"+port, handlers.CORS(handlers.AllowedOrigins([]string{"*"}))(r)); err != nil {
 		log.Fatalf("Failed to start HTTP server: %v", err)
 	}
 }
@@ -124,6 +130,11 @@ func initDatabase() {
 	if err := db.AutoMigrate(&Pastie{}); err != nil {
 		log.Fatalf("Failed to migrate database: %v", err)
 	}
+}
+
+func healthCheck(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte("OK"))
 }
 
 func serveCreateForm(w http.ResponseWriter, r *http.Request) {
@@ -218,26 +229,6 @@ func createPaste(w http.ResponseWriter, r *http.Request) {
 	tmpl.Execute(w, map[string]string{"Link": link, "ViewOnce": fmt.Sprintf("%v", viewOnce)})
 }
 
-func healthCheck(w http.ResponseWriter, r *http.Request) {
-	w.WriteHeader(http.StatusOK)
-	w.Write([]byte("OK"))
-}
-
-func adminPasties(w http.ResponseWriter, r *http.Request) {
-	var pasties []Pastie
-	if err := db.Find(&pasties).Error; err != nil {
-		http.Error(w, "Failed to retrieve pasties", http.StatusInternalServerError)
-		return
-	}
-
-	tmpl, err := template.ParseFiles("templates/admin.html")
-	if err != nil {
-		http.Error(w, "Error loading admin template", http.StatusInternalServerError)
-		return
-	}
-	tmpl.Execute(w, pasties)
-}
-
 func getPaste(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	id := vars["id"]
@@ -316,6 +307,21 @@ func getPaste(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	tmpl.Execute(w, map[string]string{"Content": decryptedContent})
+}
+
+func adminPasties(w http.ResponseWriter, r *http.Request) {
+	var pasties []Pastie
+	if err := db.Find(&pasties).Error; err != nil {
+		http.Error(w, "Failed to retrieve pasties", http.StatusInternalServerError)
+		return
+	}
+
+	tmpl, err := template.ParseFiles("templates/admin.html")
+	if err != nil {
+		http.Error(w, "Error loading admin template", http.StatusInternalServerError)
+		return
+	}
+	tmpl.Execute(w, pasties)
 }
 
 func startExpiredPastiesCleanup(interval time.Duration) {
