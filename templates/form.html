@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Create a Paste</title>
+    <title>Pastie Pie - Create a Paste</title>
     <link href="https://fonts.googleapis.com/css2?family=Sour+Candy&display=swap" rel="stylesheet">
     <style>
         body {
@@ -29,17 +29,23 @@
             display: flex;
             align-items: center;
             gap: 20px;
+            margin-bottom: 20px;
         }
 
         .header img {
-            max-height: 150px;
+            max-height: 100px;
             object-fit: contain;
         }
 
-        .content-box {
-            flex: 1;
+        .header h1 {
+            margin: 0;
+            font-size: 2em;
+        }
+
+        form {
             display: flex;
             flex-direction: column;
+            gap: 15px;
         }
 
         textarea {
@@ -54,7 +60,9 @@
         }
 
         .options {
-            margin-top: 20px;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
         }
 
         .inline-group {
@@ -64,33 +72,28 @@
         }
 
         input[type="checkbox"] {
-            transform: scale(1.5);
+            transform: scale(1.2);
         }
 
-        .expiration-group {
-            margin-top: 20px;
-            display: flex;
-            gap: 10px;
-        }
-
-        select {
+        select, input[type="password"] {
             font-family: inherit;
             padding: 5px 10px;
             border-radius: 5px;
             border: 2px solid #e3e3e3;
             background-color: #ffffff;
-        }
-
-        input[type="text"] {
-            width: 100%;
-            padding: 10px;
-            border: 2px solid #e3e3e3;
-            border-radius: 10px;
             font-size: 16px;
         }
 
+        input[type="password"] {
+            display: none;
+            width: 100%;
+        }
+
+        input[type="password"].visible {
+            display: block;
+        }
+
         button {
-            margin-top: 20px;
             padding: 10px 20px;
             border: none;
             border-radius: 10px;
@@ -109,32 +112,47 @@
 <body>
     <div class="container">
         <div class="header">
-            <img src="static/logo.png" alt="Logo">
-            <div class="content-box">
-                <textarea placeholder="Enter your text here..." name="content"></textarea>
-            </div>
+            <img src="static/logo.png" alt="Pastie Pie Logo">
+            <h1>Pastie Pie</h1>
         </div>
-        <div class="options">
-            <div class="inline-group">
-                <input type="checkbox" id="view_once" name="view_once">
-                <label for="view_once">View Once</label>
+        <form action="/pastie" method="POST">
+            <textarea placeholder="Enter your text here..." name="content" required></textarea>
+            <div class="options">
+                <div class="inline-group">
+                    <input type="checkbox" id="view_once" name="view_once">
+                    <label for="view_once">View Once</label>
+                </div>
+                <div class="inline-group">
+                    <label for="expiration">Expiration:</label>
+                    <select id="expiration" name="expiration">
+                        <option value="5min">5 Minutes</option>
+                        <option value="30min">30 Minutes</option>
+                        <option value="1hour">1 Hour</option>
+                        <option value="1day">1 Day</option>
+                        <option value="7days">7 Days</option>
+                        <option value="forever">Forever</option>
+                    </select>
+                </div>
+                <div class="inline-group">
+                    <input type="checkbox" id="password_protect" onclick="togglePasswordField()">
+                    <label for="password_protect">Password Protect</label>
+                </div>
+                <input type="password" id="password" name="password" placeholder="Enter password">
             </div>
-            <div class="expiration-group">
-                <label for="expiration">Expiration:</label>
-                <select id="expiration" name="expiration">
-                    <option value="5min">5 Minutes</option>
-                    <option value="30min">30 Minutes</option>
-                    <option value="1hour">1 Hour</option>
-                    <option value="1day">1 Day</option>
-                    <option value="7days">7 Days</option>
-                    <option value="forever">Forever</option>
-                </select>
-            </div>
-            <div>
-                <input type="text" name="password" placeholder="Optional: Password protect this paste">
-            </div>
-        </div>
-        <button type="submit">Create Paste</button>
+            <button type="submit">Create Paste</button>
+        </form>
     </div>
+
+    <script>
+        function togglePasswordField() {
+            const passwordField = document.getElementById('password');
+            passwordField.classList.toggle('visible');
+            if (passwordField.classList.contains('visible')) {
+                passwordField.setAttribute('required', 'required');
+            } else {
+                passwordField.removeAttribute('required');
+            }
+        }
+    </script>
 </body>
 </html>
