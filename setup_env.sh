@@ -46,4 +46,6 @@ else
   echo "Temporary .env file cleared."
 fi
 
+echo "LOG_LEVEL value: $(printenv LOG_LEVEL)"
+echo "DB_PATH value: $(printenv DB_PATH)"
 echo "Environment variables successfully written to $CONFIG_FILE."
