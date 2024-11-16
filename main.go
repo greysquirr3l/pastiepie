@@ -1,4 +1,4 @@
-// PastiePie 0.7
+// PastiePie 0.9
 package main
 
 import (
@@ -32,11 +32,9 @@ var config Config
 
 // Config struct to store global settings
 type Config struct {
-	LogLevel    string `mapstructure:"log_level"`
-	AESKey      string `mapstructure:"aes_key"`
-	SSLCertPath string `mapstructure:"ssl_cert_path"`
-	SSLKeyPath  string `mapstructure:"ssl_key_path"`
-	DBPath      string `mapstructure:"db_path"`
+	LogLevel string `mapstructure:"log_level"`
+	AESKey   string `mapstructure:"aes_key"`
+	DBPath   string `mapstructure:"db_path"`
 }
 
 // Pastie struct to store each pastie
@@ -68,26 +66,18 @@ func main() {
 	// Start cleanup routine for expired pasties
 	startExpiredPastiesCleanup(10 * time.Minute)
 
-	// Start an HTTP server to redirect to HTTPS
-	go func() {
-		log.Info("HTTP server starting at :8080, redirecting to HTTPS")
-		if err := http.ListenAndServe(":8080", http.HandlerFunc(redirectToHTTPS)); err != nil {
-			log.Fatalf("Failed to start HTTP server: %v", err)
-		}
-	}()
-
-	// Start the HTTPS server
+	// Start the HTTP server
 	r := mux.NewRouter()
 	r.HandleFunc("/", serveCreateForm).Methods("GET")
 	r.HandleFunc("/pastie", createPaste).Methods("POST")
 	r.HandleFunc("/pastie/{id}", getPaste).Methods("GET", "POST")
 	r.HandleFunc("/admin/pasties", adminPasties).Methods("GET")
-	r.HandleFunc("/healthz", healthCheck).Methods("GET")
+	r.HandleFunc("/healthz", healthCheck).Methods("GET") // Healthcheck endpoint
 	r.PathPrefix("/static/").Handler(http.StripPrefix("/static/", http.FileServer(http.Dir("./static/"))))
 
-	log.Infof("PastiePie server starting at :8443 (HTTPS), cert: %s, key: %s", config.SSLCertPath, config.SSLKeyPath)
-	if err := http.ListenAndServeTLS(":8443", config.SSLCertPath, config.SSLKeyPath, handlers.CORS(handlers.AllowedOrigins([]string{"*"}))(r)); err != nil {
-		log.Fatalf("Failed to start HTTPS server: %v", err)
+	log.Infof("PastiePie server starting at :8080")
+	if err := http.ListenAndServe(":8080", handlers.CORS(handlers.AllowedOrigins([]string{"*"}))(r)); err != nil {
+		log.Fatalf("Failed to start HTTP server: %v", err)
 	}
 }
 
@@ -134,11 +124,6 @@ func initDatabase() {
 	if err := db.AutoMigrate(&Pastie{}); err != nil {
 		log.Fatalf("Failed to migrate database: %v", err)
 	}
-}
-
-func redirectToHTTPS(w http.ResponseWriter, r *http.Request) {
-	target := "https://" + r.Host + r.URL.RequestURI()
-	http.Redirect(w, r, target, http.StatusMovedPermanently)
 }
 
 func serveCreateForm(w http.ResponseWriter, r *http.Request) {
@@ -231,6 +216,11 @@ func createPaste(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	tmpl.Execute(w, map[string]string{"Link": link, "ViewOnce": fmt.Sprintf("%v", viewOnce)})
+}
+
+func healthCheck(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte("OK"))
 }
 
 func adminPasties(w http.ResponseWriter, r *http.Request) {
@@ -397,9 +387,4 @@ func decrypt(cipherText, key string) (string, error) {
 	stream.XORKeyStream(decodedCipherText, decodedCipherText)
 
 	return string(decodedCipherText), nil
-}
-
-func healthCheck(w http.ResponseWriter, r *http.Request) {
-	w.WriteHeader(http.StatusOK)
-	w.Write([]byte("OK"))
 }
