@@ -1,0 +1,26 @@
+version: '3.8'
+
+services:
+  pastiepie:
+    build: .
+    container_name: pastiepie_app
+    ports:
+      - "8080:8080"
+    environment:
+      - LOG_LEVEL=${LOG_LEVEL}
+      - DB_PATH=${DB_PATH}
+      - AES_KEY=${AES_KEY}
+    volumes:
+      - ./data:/root/data
+    restart: unless-stopped
+
+  nginx:
+    image: nginx:latest
+    container_name: nginx_proxy
+    ports:
+      - "80:80"    # HTTP traffic
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf
+    depends_on:
+      - pastiepie
+    restart: unless-stopped
