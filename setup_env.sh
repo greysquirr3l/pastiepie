@@ -21,7 +21,7 @@ for VAR in "${REQUIRED_VARS[@]}"; do
 done
 
 # Write values to config.yaml
-echo "Writing variables to config.yaml..."
+echo "Writing variables to config.yml..."
 cat <<EOL > $CONFIG_FILE
 log_level: "$(printenv LOG_LEVEL)"
 aes_key: "$(printenv MASTER_KEY)"

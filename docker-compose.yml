@@ -2,16 +2,21 @@ version: '3.8'
 
 services:
   pastiepie:
-    build: .
+    build:
+      context: .
+      dockerfile: Dockerfile
     container_name: pastiepie_app
     ports:
-      - "80:80"  # Expose port 80 (Nginx will handle HTTP traffic)
+      - "8080:8080"  # Expose internal app port to external
     environment:
-      LOG_LEVEL: "${LOG_LEVEL}"  # Application log level (set in .env or passed at runtime)
-      DB_PATH: "/root/data"       # Path to store database files
-      AES_KEY: "${AES_KEY}"       # AES encryption key (set in .env or passed at runtime)
+      MASTER_KEY: "${MASTER_KEY}"       # Secure 32-byte key for encrypting the AES key
+      LOG_LEVEL: "${LOG_LEVEL}"         # Logging level (e.g., info, debug)
+      DB_PATH: "/root/data"             # Path to the SQLite database
+      PORT: "8080"                      # Port the application listens on
     volumes:
-      - ./data:/root/data                        # Persist SQLite data across restarts
-      - ./nginx/nginx.conf:/etc/nginx/nginx.conf # Custom Nginx configuration
-      - ./supervisord.conf:/etc/supervisord.conf # Custom Supervisor configuration
-    restart: unless-stopped                      # Restart service unless explicitly stopped
+      - ./data:/root/data               # Persistent storage for database files
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf  # Custom NGINX configuration
+      - ./supervisord.conf:/etc/supervisord.conf  # Custom Supervisor configuration
+      - ./templates:/root/templates    # Templates folder for HTML files
+      - ./static:/root/static          # Static files folder
+    restart: unless-stopped

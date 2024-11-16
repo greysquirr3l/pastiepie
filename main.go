@@ -84,8 +84,8 @@ func main() {
 }
 
 func initConfig() {
-	viper.SetConfigFile("/root/config.yaml")
-	viper.SetConfigType("yaml")
+	viper.SetConfigFile("/root/config.yml")
+	viper.SetConfigType("yml")
 
 	if err := viper.ReadInConfig(); err != nil {
 		log.Fatalf("Error reading config file: %v", err)
