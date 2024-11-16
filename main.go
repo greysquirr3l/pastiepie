@@ -6,12 +6,16 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"errors"
+	"fmt"
+	"html"
+	"html/template"
 	"log"
 	"net/http"
 	"os"
 	"sync"
 	"time"
 
+	"github.com/glebarez/sqlite"
 	"github.com/gorilla/handlers"
 	"github.com/gorilla/mux"
 	"github.com/spf13/viper"
@@ -56,25 +60,15 @@ func main() {
 
 	log.Println("Starting application...")
 
-	// Initialize configuration
 	initConfig()
-
-	// Initialize database
 	initDatabase()
-
-	// Verify database is initialized
-	if db == nil {
-		log.Fatalf("Database initialization failed. Exiting.")
-	}
 	defer func() {
 		sqlDB, _ := db.DB()
 		sqlDB.Close()
 	}()
 
-	// Start cleanup routine for expired pasties
 	startExpiredPastiesCleanup(10 * time.Minute)
 
-	// Initialize HTTP server
 	r := setupRouter()
 
 	log.Printf("Server starting on port %s", config.Port)
@@ -83,21 +77,10 @@ func main() {
 	}
 }
 
-func setupRouter() *mux.Router {
-	r := mux.NewRouter()
-	r.HandleFunc("/", serveCreateForm).Methods("GET")
-	r.HandleFunc("/pastie", createPaste).Methods("POST")
-	r.HandleFunc("/pastie/{id}", getPaste).Methods("GET", "POST")
-	r.HandleFunc("/admin/pasties", adminPasties).Methods("GET")
-	r.HandleFunc("/healthz", healthCheck).Methods("GET")
-	r.PathPrefix("/static/").Handler(http.StripPrefix("/static/", http.FileServer(http.Dir("./static/"))))
-	return r
-}
-
 func initConfig() {
 	log.Println("Initializing configuration...")
 
-	viper.SetConfigFile("/root/config.yml") // Corrected file extension
+	viper.SetConfigFile("/root/config.yml")
 	viper.SetConfigType("yaml")
 
 	if err := viper.ReadInConfig(); err != nil {
@@ -113,16 +96,9 @@ func initConfig() {
 		log.Fatalf("MASTER_KEY must be 32 bytes for AES-256 encryption. Current length: %d", len(masterKey))
 	}
 
-	// Ensure the database is ready before checking for the AES key
-	if db == nil {
-		log.Fatalf("Database is not initialized during config setup.")
-	}
-
 	var storedKey AppConfig
 	result := db.First(&storedKey, "key_id = ?", "aes_key")
 	if errors.Is(result.Error, gorm.ErrRecordNotFound) {
-		log.Println("No AES key found, generating a new one...")
-
 		newAESKey := GenerateRandomAESKey()
 		encryptedAESKey, err := EncryptAES(newAESKey, masterKey)
 		if err != nil {
@@ -143,7 +119,6 @@ func initConfig() {
 	} else if result.Error != nil {
 		log.Fatalf("Failed to query database for AES key: %v", result.Error)
 	} else {
-		log.Println("AES key found in database. Decrypting...")
 		decryptedAESKey, err := DecryptAES(storedKey.EncryptedAESKey, masterKey)
 		if err != nil {
 			log.Fatalf("Failed to decrypt stored AES key: %v", err)
@@ -153,6 +128,138 @@ func initConfig() {
 	}
 
 	log.Printf("Configuration loaded: LogLevel=%s, DBPath=%s, Port=%s", config.LogLevel, config.DBPath, config.Port)
+}
+
+func initDatabase() {
+	log.Println("Initializing database...")
+
+	var err error
+	if _, err := os.Stat(config.DBPath); os.IsNotExist(err) {
+		if err := os.MkdirAll(config.DBPath, os.ModePerm); err != nil {
+			log.Fatalf("Failed to create data directory: %v", err)
+		}
+	}
+
+	dbFilePath := fmt.Sprintf("%s/pasties.db", config.DBPath)
+	db, err = gorm.Open(sqlite.Open(dbFilePath), &gorm.Config{})
+	if err != nil {
+		log.Fatalf("Failed to connect to database: %v", err)
+	}
+
+	if err := db.AutoMigrate(&Pastie{}, &AppConfig{}); err != nil {
+		log.Fatalf("Failed to migrate database: %v", err)
+	}
+
+	log.Println("Database initialized successfully.")
+}
+
+func startExpiredPastiesCleanup(interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	go func() {
+		for range ticker.C {
+			log.Println("Running cleanup for expired pasties...")
+			db.Where("expires_at <= ?", time.Now()).Delete(&Pastie{})
+		}
+	}()
+}
+
+func setupRouter() *mux.Router {
+	// Initialize a new router
+	r := mux.NewRouter()
+
+	// Define routes and their handlers
+	r.HandleFunc("/", serveCreateForm).Methods("GET")
+	r.HandleFunc("/pastie", createPaste).Methods("POST")
+	r.HandleFunc("/pastie/{id}", getPaste).Methods("GET", "POST")
+	r.HandleFunc("/admin/pasties", adminPasties).Methods("GET")
+	r.HandleFunc("/healthz", healthCheck).Methods("GET")
+
+	// Serve static files from the /static/ directory
+	r.PathPrefix("/static/").Handler(http.StripPrefix("/static/", http.FileServer(http.Dir("./static/"))))
+
+	return r
+}
+
+func serveCreateForm(w http.ResponseWriter, r *http.Request) {
+	tmpl, err := template.ParseFiles("templates/form.html")
+	if err != nil {
+		http.Error(w, "Error loading form template", http.StatusInternalServerError)
+		return
+	}
+	tmpl.Execute(w, nil)
+}
+
+func createPaste(w http.ResponseWriter, r *http.Request) {
+	content := r.FormValue("content")
+	if content == "" {
+		http.Error(w, "Content cannot be empty", http.StatusBadRequest)
+		return
+	}
+
+	sanitizedContent := html.EscapeString(content)
+	encryptedContent, err := encrypt(sanitizedContent, config.AESKey)
+	if err != nil {
+		http.Error(w, "Failed to encrypt content", http.StatusInternalServerError)
+		return
+	}
+
+	pastie := Pastie{
+		ID:        generateID(),
+		Content:   encryptedContent,
+		CreatedAt: time.Now(),
+		ExpiresAt: time.Now().Add(24 * time.Hour),
+	}
+
+	go func() {
+		if err := db.Create(&pastie).Error; err != nil {
+			log.Printf("Failed to save pastie: %v", err)
+		}
+	}()
+
+	http.Redirect(w, r, fmt.Sprintf("/pastie/%s", pastie.ID), http.StatusSeeOther)
+}
+
+func getPaste(w http.ResponseWriter, r *http.Request) {
+	id := mux.Vars(r)["id"]
+
+	var pastie Pastie
+	if err := db.First(&pastie, "id = ?", id).Error; err != nil {
+		http.Error(w, "Pastie not found", http.StatusNotFound)
+		return
+	}
+
+	decryptedContent, err := decrypt(pastie.Content, config.AESKey)
+	if err != nil {
+		http.Error(w, "Failed to decrypt content", http.StatusInternalServerError)
+		return
+	}
+
+	tmpl, err := template.ParseFiles("templates/view_pastie.html")
+	if err != nil {
+		http.Error(w, "Error loading template", http.StatusInternalServerError)
+		return
+	}
+	tmpl.Execute(w, map[string]string{"Content": decryptedContent})
+}
+
+func adminPasties(w http.ResponseWriter, r *http.Request) {
+	var pasties []Pastie
+	if err := db.Find(&pasties).Error; err != nil {
+		http.Error(w, "Failed to retrieve pasties", http.StatusInternalServerError)
+		return
+	}
+
+	tmpl, err := template.ParseFiles("templates/admin.html")
+	if err != nil {
+		http.Error(w, "Error loading admin template", http.StatusInternalServerError)
+		return
+	}
+	tmpl.Execute(w, pasties)
+}
+
+func healthCheck(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte("OK"))
 }
 
 func generateID() string {
@@ -180,25 +287,39 @@ func encrypt(plainText, key string) (string, error) {
 }
 
 func decrypt(cipherText, key string) (string, error) {
-	block, err := aes.NewCipher([]byte(key))
-	if err != nil {
-		return "", err
+	// Validate that the key length is 32 bytes (required for AES-256)
+	if len(key) != 32 {
+		return "", errors.New("invalid key size; must be 32 bytes for AES-256 decryption")
 	}
 
+	// Decode the Base64-encoded cipherText
 	cipherBytes, err := base64.StdEncoding.DecodeString(cipherText)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("failed to decode cipherText: %w", err)
 	}
 
+	// Ensure the cipherText is long enough to include the IV
 	if len(cipherBytes) < aes.BlockSize {
-		return "", errors.New("ciphertext too short")
+		return "", errors.New("ciphertext too short; missing initialization vector (IV)")
 	}
 
+	// Separate the IV and the actual encrypted data
 	iv := cipherBytes[:aes.BlockSize]
 	cipherBytes = cipherBytes[aes.BlockSize:]
 
+	// Create a new AES cipher block with the provided key
+	block, err := aes.NewCipher([]byte(key))
+	if err != nil {
+		return "", fmt.Errorf("failed to create AES cipher block: %w", err)
+	}
+
+	// Create a decrypter using the block cipher and IV
 	stream := cipher.NewCFBDecrypter(block, iv)
+
+	// Decrypt the cipherBytes in place
 	stream.XORKeyStream(cipherBytes, cipherBytes)
+
+	// Return the decrypted plaintext as a string
 	return string(cipherBytes), nil
 }
 
