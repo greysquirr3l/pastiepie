@@ -55,21 +55,28 @@ func main() {
 		}
 	}()
 
+	log.Info("Starting PastiePie application...")
+
 	initConfig()
 	initLogging()
 	initDatabase()
 	defer func() {
 		sqlDB, _ := db.DB()
+		log.Info("Closing database connection.")
 		sqlDB.Close()
 	}()
 
 	// Start cleanup routine for expired pasties
+	log.Info("Initializing expired pasties cleanup routine.")
 	startExpiredPastiesCleanup(10 * time.Minute)
 
 	// Get port from environment variable, default to 8081
 	port := os.Getenv("PORT")
 	if port == "" {
-		port = "8081" // Default to port 8081 to work with NGINX proxy
+		port = "8081" // Default to port 8081
+		log.Warn("PORT environment variable not set. Defaulting to 8081.")
+	} else {
+		log.Infof("Using port from environment variable: %s", port)
 	}
 
 	// Start the HTTP server
@@ -78,16 +85,17 @@ func main() {
 	r.HandleFunc("/pastie", createPaste).Methods("POST")
 	r.HandleFunc("/pastie/{id}", getPaste).Methods("GET", "POST")
 	r.HandleFunc("/admin/pasties", adminPasties).Methods("GET")
-	r.HandleFunc("/healthz", healthCheck).Methods("GET") // Healthcheck endpoint
+	r.HandleFunc("/healthz", healthCheck).Methods("GET")
 	r.PathPrefix("/static/").Handler(http.StripPrefix("/static/", http.FileServer(http.Dir("./static/"))))
 
-	log.Infof("PastiePie server starting at :%s", port)
+	log.Infof("PastiePie server is starting on port %s...", port)
 	if err := http.ListenAndServe(":"+port, handlers.CORS(handlers.AllowedOrigins([]string{"*"}))(r)); err != nil {
 		log.Fatalf("Failed to start HTTP server: %v", err)
 	}
 }
 
 func initConfig() {
+	log.Info("Initializing configuration...")
 	viper.SetConfigName("config")
 	viper.SetConfigType("yaml")
 	viper.AddConfigPath(".")
@@ -103,21 +111,26 @@ func initConfig() {
 	if len(config.AESKey) != 32 {
 		log.Fatalf("AES key must be 32 bytes for AES-256 encryption. Current length: %d", len(config.AESKey))
 	}
+	log.Info("Configuration loaded successfully.")
 }
 
 func initLogging() {
+	log.Info("Setting up logging...")
 	log.SetFormatter(&logrus.TextFormatter{FullTimestamp: true})
 	level, err := logrus.ParseLevel(config.LogLevel)
 	if err != nil {
-		log.Warnf("Invalid log level in config, defaulting to 'info'")
+		log.Warnf("Invalid log level in config (%s). Defaulting to 'info'.", config.LogLevel)
 		level = logrus.InfoLevel
 	}
 	log.SetLevel(level)
+	log.Infof("Log level set to: %s", log.GetLevel())
 }
 
 func initDatabase() {
+	log.Info("Initializing database...")
 	var err error
 	if _, err := os.Stat(config.DBPath); os.IsNotExist(err) {
+		log.Warnf("Database path does not exist: %s. Creating directory...", config.DBPath)
 		if err := os.MkdirAll(config.DBPath, os.ModePerm); err != nil {
 			log.Fatalf("Failed to create data directory: %v", err)
 		}
@@ -130,16 +143,21 @@ func initDatabase() {
 	if err := db.AutoMigrate(&Pastie{}); err != nil {
 		log.Fatalf("Failed to migrate database: %v", err)
 	}
+	log.Info("Database initialized successfully.")
 }
 
 func healthCheck(w http.ResponseWriter, r *http.Request) {
+	log.Debug("Health check endpoint hit.")
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte("OK"))
+	log.Debug("Health check responded with 200 OK.")
 }
 
 func serveCreateForm(w http.ResponseWriter, r *http.Request) {
+	log.Debug("Serving create form.")
 	tmpl, err := template.ParseFiles("templates/form.html")
 	if err != nil {
+		log.Errorf("Error loading form template: %v", err)
 		http.Error(w, "Error loading form template", http.StatusInternalServerError)
 		return
 	}
@@ -152,17 +170,17 @@ func createPaste(w http.ResponseWriter, r *http.Request) {
 	viewOnce := r.FormValue("view_once") == "true"
 	expiration := r.FormValue("expiration")
 
-	log.Infof("Creating new pastie with viewOnce: %v, expiration: %s", viewOnce, expiration) // Debug log
+	log.Infof("Creating new pastie. ViewOnce: %v, Expiration: %s", viewOnce, expiration)
 
 	if content == "" {
+		log.Warn("Failed to create pastie: Content cannot be empty.")
 		http.Error(w, "Content cannot be empty", http.StatusBadRequest)
 		return
 	}
 
-	// Set expiration time based on user input
 	var expiresAt time.Time
 	if expiration == "forever" {
-		expiresAt = time.Time{} // Zero value of time.Time to represent "no expiration"
+		expiresAt = time.Time{}
 	} else {
 		switch expiration {
 		case "5min":
@@ -176,21 +194,18 @@ func createPaste(w http.ResponseWriter, r *http.Request) {
 		case "7days":
 			expiresAt = time.Now().Add(7 * 24 * time.Hour)
 		default:
-			expiresAt = time.Now().Add(24 * time.Hour) // Default to 1 day if not specified
+			expiresAt = time.Now().Add(24 * time.Hour)
 		}
 	}
 
-	// Sanitize content
 	sanitizedContent := html.EscapeString(content)
-
-	// Encrypt content
 	encryptedContent, err := encrypt(sanitizedContent, config.AESKey)
 	if err != nil {
+		log.Errorf("Failed to encrypt content: %v", err)
 		http.Error(w, "Failed to encrypt content", http.StatusInternalServerError)
 		return
 	}
 
-	// Create pastie object
 	pastie := Pastie{
 		ID:        generateID(),
 		Content:   encryptedContent,
@@ -199,144 +214,35 @@ func createPaste(w http.ResponseWriter, r *http.Request) {
 		ViewOnce:  viewOnce,
 	}
 
-	// If password is provided, hash it
 	if password != "" {
 		hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
 		if err != nil {
+			log.Errorf("Failed to hash password: %v", err)
 			http.Error(w, "Failed to hash password", http.StatusInternalServerError)
 			return
 		}
 		pastie.PasswordHash = string(hash)
 	}
 
-	// Save pastie asynchronously
 	go func() {
 		if err := db.Create(&pastie).Error; err != nil {
 			log.Errorf("Failed to save pastie: %v", err)
 		} else {
-			log.Infof("Successfully created pastie with ID: %s, viewOnce: %v", pastie.ID, pastie.ViewOnce)
+			log.Infof("Successfully created pastie with ID: %s, ViewOnce: %v", pastie.ID, pastie.ViewOnce)
 		}
 	}()
 
-	// Generate the link to share
 	link := fmt.Sprintf("https://%s/pastie/%s", r.Host, pastie.ID)
+
+	log.Infof("Generated shareable link for pastie: %s", link)
 
 	tmpl, err := template.ParseFiles("templates/share_link.html")
 	if err != nil {
+		log.Errorf("Error loading share link template: %v", err)
 		http.Error(w, "Error loading share link template", http.StatusInternalServerError)
 		return
 	}
 	tmpl.Execute(w, map[string]string{"Link": link, "ViewOnce": fmt.Sprintf("%v", viewOnce)})
-}
-
-func getPaste(w http.ResponseWriter, r *http.Request) {
-	vars := mux.Vars(r)
-	id := vars["id"]
-
-	var pastie Pastie
-	if err := db.First(&pastie, "id = ?", id).Error; err != nil {
-		http.Error(w, "Pastie not found", http.StatusNotFound)
-		return
-	}
-
-	// Check if the pastie has expired
-	if !pastie.ExpiresAt.IsZero() && time.Now().After(pastie.ExpiresAt) {
-		log.Infof("Deleting expired pastie with ID: %s", pastie.ID) // Debug log for expired pastie
-		db.Delete(&pastie)
-		http.Error(w, "This pastie has expired.", http.StatusGone)
-		return
-	}
-
-	// Check if the pastie is view-once and already viewed
-	if pastie.ViewOnce && pastie.Viewed {
-		http.Error(w, "Pastie not found", http.StatusNotFound)
-		return
-	}
-
-	// Handle password-protected pastie
-	if pastie.PasswordHash != "" {
-		if r.Method == http.MethodGet {
-			tmpl, err := template.ParseFiles("templates/password_prompt.html")
-			if err != nil {
-				http.Error(w, "Error loading password prompt template", http.StatusInternalServerError)
-				return
-			}
-			tmpl.Execute(w, map[string]string{"PastieID": id})
-			return
-		}
-
-		if r.Method == http.MethodPost {
-			password := r.FormValue("password")
-			if password == "" {
-				http.Error(w, "Password is required to view this pastie", http.StatusUnauthorized)
-				return
-			}
-			if err := bcrypt.CompareHashAndPassword([]byte(pastie.PasswordHash), []byte(password)); err != nil {
-				http.Error(w, "Invalid password", http.StatusUnauthorized)
-				return
-			}
-		}
-	}
-
-	// Decrypt content
-	decryptedContent, err := decrypt(pastie.Content, config.AESKey)
-	if err != nil {
-		http.Error(w, "Failed to decrypt content", http.StatusInternalServerError)
-		return
-	}
-
-	// For view-once pasties, mark as viewed and delete immediately
-	if pastie.ViewOnce {
-		log.Infof("Viewing and deleting view-once pastie with ID: %s", pastie.ID) // Debug log for view-once
-		pastie.Viewed = true
-		if err := db.Delete(&pastie).Error; err != nil {
-			log.Errorf("Failed to delete view-once pastie: %v", err)
-			http.Error(w, "Failed to delete pastie after viewing", http.StatusInternalServerError)
-			return
-		}
-	} else {
-		pastie.Viewed = true
-		if err := db.Save(&pastie).Error; err != nil {
-			log.Errorf("Failed to update pastie as viewed: %v", err)
-		}
-	}
-
-	tmpl, err := template.ParseFiles("templates/view_pastie.html")
-	if err != nil {
-		http.Error(w, "Error loading view pastie template", http.StatusInternalServerError)
-		return
-	}
-	tmpl.Execute(w, map[string]string{"Content": decryptedContent})
-}
-
-func adminPasties(w http.ResponseWriter, r *http.Request) {
-	var pasties []Pastie
-	if err := db.Find(&pasties).Error; err != nil {
-		http.Error(w, "Failed to retrieve pasties", http.StatusInternalServerError)
-		return
-	}
-
-	tmpl, err := template.ParseFiles("templates/admin.html")
-	if err != nil {
-		http.Error(w, "Error loading admin template", http.StatusInternalServerError)
-		return
-	}
-	tmpl.Execute(w, pasties)
-}
-
-func startExpiredPastiesCleanup(interval time.Duration) {
-	ticker := time.NewTicker(interval)
-	go func() {
-		for range ticker.C {
-			log.Info("Running expired pasties cleanup...")
-			now := time.Now()
-			if err := db.Where("expires_at <= ?", now).Delete(&Pastie{}).Error; err != nil {
-				log.Errorf("Failed to clean up expired pasties: %v", err)
-			} else {
-				log.Info("Expired pasties cleanup completed.")
-			}
-		}
-	}()
 }
 
 func generateID() string {
@@ -344,6 +250,7 @@ func generateID() string {
 	_, err := rand.Read(b)
 	if err != nil {
 		log.Errorf("Failed to generate random ID: %v", err)
+		return ""
 	}
 	return base64.URLEncoding.EncodeToString(b)
 }
@@ -393,4 +300,109 @@ func decrypt(cipherText, key string) (string, error) {
 	stream.XORKeyStream(decodedCipherText, decodedCipherText)
 
 	return string(decodedCipherText), nil
+}
+
+func getPaste(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	id := vars["id"]
+
+	var pastie Pastie
+	if err := db.First(&pastie, "id = ?", id).Error; err != nil {
+		http.Error(w, "Pastie not found", http.StatusNotFound)
+		return
+	}
+
+	if !pastie.ExpiresAt.IsZero() && time.Now().After(pastie.ExpiresAt) {
+		log.Infof("Deleting expired pastie with ID: %s", pastie.ID)
+		db.Delete(&pastie)
+		http.Error(w, "This pastie has expired.", http.StatusGone)
+		return
+	}
+
+	if pastie.ViewOnce && pastie.Viewed {
+		http.Error(w, "Pastie not found", http.StatusNotFound)
+		return
+	}
+
+	if pastie.PasswordHash != "" {
+		if r.Method == http.MethodGet {
+			tmpl, err := template.ParseFiles("templates/password_prompt.html")
+			if err != nil {
+				http.Error(w, "Error loading password prompt template", http.StatusInternalServerError)
+				return
+			}
+			tmpl.Execute(w, map[string]string{"PastieID": id})
+			return
+		}
+
+		if r.Method == http.MethodPost {
+			password := r.FormValue("password")
+			if password == "" {
+				http.Error(w, "Password is required to view this pastie", http.StatusUnauthorized)
+				return
+			}
+			if err := bcrypt.CompareHashAndPassword([]byte(pastie.PasswordHash), []byte(password)); err != nil {
+				http.Error(w, "Invalid password", http.StatusUnauthorized)
+				return
+			}
+		}
+	}
+
+	decryptedContent, err := decrypt(pastie.Content, config.AESKey)
+	if err != nil {
+		http.Error(w, "Failed to decrypt content", http.StatusInternalServerError)
+		return
+	}
+
+	if pastie.ViewOnce {
+		log.Infof("Viewing and deleting view-once pastie with ID: %s", pastie.ID)
+		pastie.Viewed = true
+		if err := db.Delete(&pastie).Error; err != nil {
+			log.Errorf("Failed to delete view-once pastie: %v", err)
+			http.Error(w, "Failed to delete pastie after viewing", http.StatusInternalServerError)
+			return
+		}
+	} else {
+		pastie.Viewed = true
+		if err := db.Save(&pastie).Error; err != nil {
+			log.Errorf("Failed to update pastie as viewed: %v", err)
+		}
+	}
+
+	tmpl, err := template.ParseFiles("templates/view_pastie.html")
+	if err != nil {
+		http.Error(w, "Error loading view pastie template", http.StatusInternalServerError)
+		return
+	}
+	tmpl.Execute(w, map[string]string{"Content": decryptedContent})
+}
+
+func adminPasties(w http.ResponseWriter, r *http.Request) {
+	var pasties []Pastie
+	if err := db.Find(&pasties).Error; err != nil {
+		http.Error(w, "Failed to retrieve pasties", http.StatusInternalServerError)
+		return
+	}
+
+	tmpl, err := template.ParseFiles("templates/admin.html")
+	if err != nil {
+		http.Error(w, "Error loading admin template", http.StatusInternalServerError)
+		return
+	}
+	tmpl.Execute(w, pasties)
+}
+
+func startExpiredPastiesCleanup(interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	go func() {
+		for range ticker.C {
+			log.Info("Running expired pasties cleanup...")
+			now := time.Now()
+			if err := db.Where("expires_at <= ?", now).Delete(&Pastie{}).Error; err != nil {
+				log.Errorf("Failed to clean up expired pasties: %v", err)
+			} else {
+				log.Info("Expired pasties cleanup completed.")
+			}
+		}
+	}()
 }
