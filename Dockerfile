@@ -45,8 +45,12 @@ RUN mkdir -p /root/data
 # Ensure the binary has executable permissions
 RUN chmod +x /root/pastiepie
 
-# Expose port 8080 for internal HTTP traffic
-EXPOSE 8080
+# Add default config.yaml for PastiePie
+COPY config.yaml /root/config.yaml
+RUN chmod 644 /root/config.yaml
+
+# Expose port 80 for HTTP traffic (Nginx)
+EXPOSE 80
 
 # Command to run supervisord, which will manage Nginx and the Go application
 CMD ["/usr/bin/supervisord", "-c", "/etc/supervisord.conf"]

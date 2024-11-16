@@ -5,13 +5,13 @@ services:
     build: .
     container_name: pastiepie_app
     ports:
-      - "8080:8080"  # Publicly expose port 8080 (Nginx will handle traffic)
+      - "80:80"  # Expose port 80 (Nginx will handle HTTP traffic)
     environment:
-      LOG_LEVEL: "${LOG_LEVEL}"
-      DB_PATH: "/root/data"
-      AES_KEY: "${AES_KEY}"
+      LOG_LEVEL: "${LOG_LEVEL}"  # Application log level (set in .env or passed at runtime)
+      DB_PATH: "/root/data"       # Path to store database files
+      AES_KEY: "${AES_KEY}"       # AES encryption key (set in .env or passed at runtime)
     volumes:
-      - ./data:/root/data  # Persist data across restarts
-      - ./nginx/nginx.conf:/etc/nginx/nginx.conf  # Use custom nginx config
-      - ./supervisord.conf:/etc/supervisord.conf  # Use Supervisor configuration
-    restart: unless-stopped
+      - ./data:/root/data                        # Persist SQLite data across restarts
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf # Custom Nginx configuration
+      - ./supervisord.conf:/etc/supervisord.conf # Custom Supervisor configuration
+    restart: unless-stopped                      # Restart service unless explicitly stopped
