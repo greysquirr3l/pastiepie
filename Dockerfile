@@ -45,8 +45,8 @@ RUN mkdir -p /root/data
 # Ensure the binary has executable permissions
 RUN chmod +x /root/pastiepie
 
-# Add default config.yaml for PastiePie
-COPY config.yaml /root/config.yml
+# Add default config.yml for PastiePie
+COPY config.yml /root/config.yml
 RUN chmod 644 /root/config.yml
 
 # Expose port 80 for HTTP traffic (Nginx)
