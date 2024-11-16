@@ -97,7 +97,7 @@ func main() {
 func initConfig() {
 	log.Info("Initializing configuration...")
 	viper.SetConfigName("config")
-	viper.SetConfigType("yaml")
+	viper.SetConfigType("yml")
 	viper.AddConfigPath(".")
 
 	if err := viper.ReadInConfig(); err != nil {
