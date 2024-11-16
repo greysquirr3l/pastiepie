@@ -1,10 +1,16 @@
-// PastiePie 0.6
+// PastiePie 0.7
 package main
 
 import (
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/rand"
+	"encoding/base64"
+	"errors"
 	"fmt"
 	"html"
 	"html/template"
+	"io"
 	"net/http"
 	"os"
 	"sync"
@@ -129,6 +135,11 @@ func initDatabase() {
 	}
 }
 
+func redirectToHTTPS(w http.ResponseWriter, r *http.Request) {
+	target := "https://" + r.Host + r.URL.RequestURI()
+	http.Redirect(w, r, target, http.StatusMovedPermanently)
+}
+
 func serveCreateForm(w http.ResponseWriter, r *http.Request) {
 	tmpl, err := template.ParseFiles("templates/form.html")
 	if err != nil {
@@ -219,6 +230,21 @@ func createPaste(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	tmpl.Execute(w, map[string]string{"Link": link, "ViewOnce": fmt.Sprintf("%v", viewOnce)})
+}
+
+func adminPasties(w http.ResponseWriter, r *http.Request) {
+	var pasties []Pastie
+	if err := db.Find(&pasties).Error; err != nil {
+		http.Error(w, "Failed to retrieve pasties", http.StatusInternalServerError)
+		return
+	}
+
+	tmpl, err := template.ParseFiles("templates/admin.html")
+	if err != nil {
+		http.Error(w, "Error loading admin template", http.StatusInternalServerError)
+		return
+	}
+	tmpl.Execute(w, pasties)
 }
 
 func getPaste(w http.ResponseWriter, r *http.Request) {
@@ -314,4 +340,60 @@ func startExpiredPastiesCleanup(interval time.Duration) {
 			}
 		}
 	}()
+}
+
+func generateID() string {
+	b := make([]byte, 12) // 12 bytes = 96 bits, encoded as base64 becomes 16 characters
+	_, err := rand.Read(b)
+	if err != nil {
+		log.Errorf("Failed to generate random ID: %v", err)
+	}
+	return base64.URLEncoding.EncodeToString(b)
+}
+
+func encrypt(plainText, key string) (string, error) {
+	if len(key) != 32 {
+		return "", errors.New("invalid key size; must be 32 bytes for AES-256")
+	}
+
+	block, err := aes.NewCipher([]byte(key))
+	if err != nil {
+		return "", err
+	}
+
+	cipherText := make([]byte, aes.BlockSize+len(plainText))
+	iv := cipherText[:aes.BlockSize]
+
+	if _, err := io.ReadFull(rand.Reader, iv); err != nil {
+		return "", err
+	}
+
+	stream := cipher.NewCFBEncrypter(block, iv)
+	stream.XORKeyStream(cipherText[aes.BlockSize:], []byte(plainText))
+
+	return base64.URLEncoding.EncodeToString(cipherText), nil
+}
+
+func decrypt(cipherText, key string) (string, error) {
+	if len(key) != 32 {
+		return "", errors.New("invalid key size; must be 32 bytes for AES-256")
+	}
+
+	block, err := aes.NewCipher([]byte(key))
+	if err != nil {
+		return "", err
+	}
+
+	decodedCipherText, _ := base64.URLEncoding.DecodeString(cipherText)
+	if len(decodedCipherText) < aes.BlockSize {
+		return "", errors.New("ciphertext too short")
+	}
+
+	iv := decodedCipherText[:aes.BlockSize]
+	decodedCipherText = decodedCipherText[aes.BlockSize:]
+
+	stream := cipher.NewCFBDecrypter(block, iv)
+	stream.XORKeyStream(decodedCipherText, decodedCipherText)
+
+	return string(decodedCipherText), nil
 }
