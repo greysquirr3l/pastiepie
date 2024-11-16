@@ -60,18 +60,24 @@ func main() {
 
 	log.Println("Starting application...")
 
-	initDatabase()
+	// Initialize configuration first to populate the config object
 	initConfig()
+
+	// Initialize the database with the populated config values
+	initDatabase()
 
 	defer func() {
 		sqlDB, _ := db.DB()
 		sqlDB.Close()
 	}()
 
+	// Start the cleanup routine for expired pasties
 	startExpiredPastiesCleanup(10 * time.Minute)
 
+	// Set up the HTTP router
 	r := setupRouter()
 
+	// Start the HTTP server
 	log.Printf("Server starting on port %s", config.Port)
 	if err := http.ListenAndServe(":"+config.Port, handlers.CORS(handlers.AllowedOrigins([]string{"*"}))(r)); err != nil {
 		log.Fatalf("Failed to start HTTP server: %v", err)
@@ -81,6 +87,7 @@ func main() {
 func initConfig() {
 	log.Println("Initializing configuration...")
 
+	// Load configuration file using Viper
 	viper.SetConfigFile("/root/config.yml")
 	viper.SetConfigType("yaml")
 
@@ -88,12 +95,14 @@ func initConfig() {
 		log.Fatalf("Error reading config file: %v", err)
 	}
 
+	// Load config values into the config struct
 	config.LogLevel = viper.GetString("log_level")
 	config.DBPath = viper.GetString("db_path")
 	config.Port = viper.GetString("port")
 
-	log.Printf("Config values: LogLevel=%s, DBPath=%s, Port=%s", config.LogLevel, config.DBPath, config.Port)
+	log.Printf("Loaded configuration: LogLevel=%s, DBPath=%s, Port=%s", config.LogLevel, config.DBPath, config.Port)
 
+	// Validate MASTER_KEY environment variable
 	masterKey := os.Getenv("MASTER_KEY")
 	if len(masterKey) != 32 {
 		log.Fatalf("MASTER_KEY must be 32 bytes for AES-256 encryption. Current length: %d", len(masterKey))
@@ -104,10 +113,12 @@ func initConfig() {
 		log.Fatalf("Database is not initialized. Ensure initDatabase() is called before initConfig().")
 	}
 
+	// Verify AES key in the database
 	log.Println("Verifying AES key in database...")
 	var storedKey AppConfig
 	result := db.First(&storedKey, "key_id = ?", "aes_key")
 	if errors.Is(result.Error, gorm.ErrRecordNotFound) {
+		// No AES key found, generate a new one
 		log.Println("No AES key found, generating a new one...")
 
 		newAESKey := GenerateRandomAESKey()
@@ -116,6 +127,7 @@ func initConfig() {
 			log.Fatalf("Failed to encrypt AES key: %v", err)
 		}
 
+		// Store the encrypted AES key in the database
 		storedKey = AppConfig{
 			KeyID:           "aes_key",
 			EncryptedAESKey: encryptedAESKey,
@@ -130,6 +142,7 @@ func initConfig() {
 	} else if result.Error != nil {
 		log.Fatalf("Failed to query database for AES key: %v", result.Error)
 	} else {
+		// AES key exists, decrypt it
 		log.Println("AES key found in database. Decrypting...")
 		decryptedAESKey, err := DecryptAES(storedKey.EncryptedAESKey, masterKey)
 		if err != nil {
@@ -143,27 +156,37 @@ func initConfig() {
 func initDatabase() {
 	log.Println("Initializing database...")
 
+	// Ensure DBPath is set
 	if config.DBPath == "" {
 		log.Fatalf("Database path is empty. Check your config file or environment variables.")
 	}
 
+	// Ensure the data directory exists
 	var err error
 	if _, err := os.Stat(config.DBPath); os.IsNotExist(err) {
+		log.Printf("Data directory does not exist at %s. Creating it...", config.DBPath)
 		if err := os.MkdirAll(config.DBPath, os.ModePerm); err != nil {
 			log.Fatalf("Failed to create data directory: %v", err)
 		}
 	}
 
+	// Build the database file path
 	dbFilePath := fmt.Sprintf("%s/pasties.db", config.DBPath)
+	log.Printf("Using database file: %s", dbFilePath)
+
+	// Connect to the database
 	db, err = gorm.Open(sqlite.Open(dbFilePath), &gorm.Config{})
 	if err != nil {
 		log.Fatalf("Failed to connect to database: %v", err)
 	}
 
+	// Apply migrations
+	log.Println("Applying database migrations...")
 	if err := db.AutoMigrate(&Pastie{}, &AppConfig{}); err != nil {
 		log.Fatalf("Failed to migrate database: %v", err)
 	}
 
+	// Log successful initialization
 	log.Println("Database initialized successfully.")
 }
 
