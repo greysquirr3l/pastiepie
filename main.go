@@ -60,34 +60,37 @@ func main() {
 
 	log.Println("Starting application...")
 
-	// Initialize configuration first to populate the config object
-	initConfig()
+	// Step 1: Load configuration values
+	initConfig(true)
 
-	// Initialize the database with the populated config values
+	// Step 2: Initialize the database
 	initDatabase()
+
+	// Step 3: Manage AES key after the database is initialized
+	initConfig(false)
 
 	defer func() {
 		sqlDB, _ := db.DB()
 		sqlDB.Close()
 	}()
 
-	// Start the cleanup routine for expired pasties
+	// Step 4: Start cleanup routine for expired pasties
 	startExpiredPastiesCleanup(10 * time.Minute)
 
-	// Set up the HTTP router
+	// Step 5: Set up the HTTP router
 	r := setupRouter()
 
-	// Start the HTTP server
+	// Step 6: Start the HTTP server
 	log.Printf("Server starting on port %s", config.Port)
 	if err := http.ListenAndServe(":"+config.Port, handlers.CORS(handlers.AllowedOrigins([]string{"*"}))(r)); err != nil {
 		log.Fatalf("Failed to start HTTP server: %v", err)
 	}
 }
 
-func initConfig() {
+func initConfig(loadOnly bool) {
 	log.Println("Initializing configuration...")
 
-	// Load configuration file using Viper
+	// Load configuration file
 	viper.SetConfigFile("/root/config.yml")
 	viper.SetConfigType("yaml")
 
@@ -95,30 +98,29 @@ func initConfig() {
 		log.Fatalf("Error reading config file: %v", err)
 	}
 
-	// Load config values into the config struct
+	// Populate config values
 	config.LogLevel = viper.GetString("log_level")
 	config.DBPath = viper.GetString("db_path")
 	config.Port = viper.GetString("port")
 
 	log.Printf("Loaded configuration: LogLevel=%s, DBPath=%s, Port=%s", config.LogLevel, config.DBPath, config.Port)
 
-	// Validate MASTER_KEY environment variable
+	if loadOnly {
+		// Skip AES key management if we're only loading the configuration
+		return
+	}
+
+	// Validate MASTER_KEY
 	masterKey := os.Getenv("MASTER_KEY")
 	if len(masterKey) != 32 {
 		log.Fatalf("MASTER_KEY must be 32 bytes for AES-256 encryption. Current length: %d", len(masterKey))
 	}
 
-	// Ensure the database is initialized before querying
-	if db == nil {
-		log.Fatalf("Database is not initialized. Ensure initDatabase() is called before initConfig().")
-	}
-
-	// Verify AES key in the database
+	// Verify and manage AES key in the database
 	log.Println("Verifying AES key in database...")
 	var storedKey AppConfig
 	result := db.First(&storedKey, "key_id = ?", "aes_key")
 	if errors.Is(result.Error, gorm.ErrRecordNotFound) {
-		// No AES key found, generate a new one
 		log.Println("No AES key found, generating a new one...")
 
 		newAESKey := GenerateRandomAESKey()
@@ -127,7 +129,6 @@ func initConfig() {
 			log.Fatalf("Failed to encrypt AES key: %v", err)
 		}
 
-		// Store the encrypted AES key in the database
 		storedKey = AppConfig{
 			KeyID:           "aes_key",
 			EncryptedAESKey: encryptedAESKey,
@@ -142,7 +143,6 @@ func initConfig() {
 	} else if result.Error != nil {
 		log.Fatalf("Failed to query database for AES key: %v", result.Error)
 	} else {
-		// AES key exists, decrypt it
 		log.Println("AES key found in database. Decrypting...")
 		decryptedAESKey, err := DecryptAES(storedKey.EncryptedAESKey, masterKey)
 		if err != nil {
