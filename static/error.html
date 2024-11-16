@@ -4,51 +4,52 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Error</title>
+    <link rel="stylesheet" href="css/bootstrap.min.css">
+    <link href="https://fonts.googleapis.com/css2?family=Sour+Gummy&display=swap" rel="stylesheet">
     <style>
         body {
-            font-family: Arial, sans-serif;
-            background-color: #f4f4f4;
+            font-family: 'Sour Gummy', sans-serif;
+            background-color: #f8f8f4;
             margin: 0;
             padding: 0;
             display: flex;
             justify-content: center;
             align-items: center;
-            height: 100vh;
-            color: #333;
+            min-height: 100vh;
         }
         .container {
             text-align: center;
-            max-width: 600px;
-            background: #fff;
-            padding: 20px;
+            background: #ffffff;
+            padding: 30px;
             border-radius: 10px;
             box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+            max-width: 600px;
+            width: 100%;
         }
         h1 {
-            font-size: 3em;
-            margin: 0;
+            font-size: 2.5rem;
             color: #d9534f;
+            margin-bottom: 15px;
         }
         p {
-            margin: 10px 0;
-            font-size: 1.2em;
+            font-size: 1.2rem;
+            margin-bottom: 15px;
         }
         .details {
             margin-top: 20px;
             color: #666;
-            font-size: 0.9em;
+            font-size: 0.9rem;
         }
-        .back-button {
-            display: inline-block;
+        .btn-home {
             margin-top: 20px;
             padding: 10px 20px;
-            font-size: 1em;
-            color: #fff;
-            background-color: #5bc0de;
-            text-decoration: none;
+            font-size: 1rem;
             border-radius: 5px;
+            background-color: #5bc0de;
+            color: white;
+            text-decoration: none;
         }
-        .back-button:hover {
+        .btn-home:hover {
             background-color: #31b0d5;
         }
     </style>
@@ -56,22 +57,21 @@
 <body>
     <div class="container">
         <h1>Error <span id="status-code"></span></h1>
-        <p>Oops! Something went wrong.</p>
-        <p id="error-message">Please try refreshing the page or come back later.</p>
+        <p id="error-message">Oops! Something went wrong.</p>
         <p class="details">
             <strong>URL:</strong> <span id="current-url"></span><br>
             <strong>Timestamp:</strong> <span id="timestamp"></span>
         </p>
-        <a href="/" class="back-button">Go to Home</a>
+        <a href="/" class="btn btn-home">Go to Home</a>
     </div>
 
     <script>
-        // Dynamically populate error details
+        // Populate error details dynamically
         document.getElementById("status-code").textContent = window.location.pathname.split("/")[1] || "Unknown";
         document.getElementById("current-url").textContent = window.location.href;
         document.getElementById("timestamp").textContent = new Date().toLocaleString();
 
-        // Customize message for specific errors
+        // Customize the error message based on the status code
         const statusCode = parseInt(window.location.pathname.split("/")[1], 10);
         const errorMessage = document.getElementById("error-message");
 
@@ -90,5 +90,6 @@
                 break;
         }
     </script>
+    <script src="js/bootstrap.bundle.min.js"></script>
 </body>
 </html>
