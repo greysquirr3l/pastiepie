@@ -9,60 +9,43 @@
         body {
             font-family: 'Sour Gummy', sans-serif;
         }
-        table {
-            margin-top: 20px;
-        }
-        th, td {
-            text-align: center;
-            vertical-align: middle;
+        .container {
+            margin-top: 40px;
         }
     </style>
-    <title>Admin - PastiePie Database Content</title>
+    <title>Admin - View All Pasties</title>
 </head>
 <body>
-    <div class="container mt-5">
-        <div class="text-center">
-            <img src="/static/images/whispering_pie_logo.png" alt="PastiePie Logo" style="width: 150px;">
-        </div>
-        <h1 class="mt-4">Admin - Current Pastie Database Content</h1>
-        <table class="table table-bordered table-striped mt-4">
-            <thead class="thead-dark">
+    <div class="container">
+        <h1>Admin Panel - All Pasties</h1>
+        <table class="table table-striped">
+            <thead>
                 <tr>
                     <th>ID</th>
-                    <th>Content (Encrypted)</th>
-                    <th>Password Protected</th>
+                    <th>Created At</th>
+                    <th>Expires At</th>
                     <th>View Once</th>
                     <th>Viewed</th>
-                    <th>Expires At</th>
-                    <th>Time Remaining</th>
                 </tr>
             </thead>
             <tbody>
                 {{range .}}
                 <tr>
                     <td>{{.ID}}</td>
-                    <td>{{.Content}}</td>
-                    <td>{{if .PasswordHash}}Yes{{else}}No{{end}}</td>
-                    <td>{{if .ViewOnce}}Yes{{else}}No{{end}}</td>
-                    <td>{{if .Viewed}}Yes{{else}}No{{end}}</td>
-                    <td>{{if .ExpiresAt.IsZero}}Never{{else}}{{.ExpiresAt.Format "2006-01-02 15:04:05" }}{{end}}</td>
+                    <td>{{.CreatedAt.Format "2006-01-02 15:04:05"}}</td>
                     <td>
-                        {{if not .ExpiresAt.IsZero}}
-                            {{if gt .ExpiresAt.Unix (now.Unix)}}
-                                {{/* Calculate time remaining */}}
-                                {{- $duration := sub .ExpiresAt.Unix (now.Unix) -}}
-                                {{- printf "%02d:%02d:%02d" (div $duration 3600) (mod (div $duration 60) 60) (mod $duration 60) -}}
-                            {{else}}
-                                Expired
-                            {{end}}
+                        {{if .ExpiresAt.IsZero}}
+                            Never
                         {{else}}
-                            Never Expires
+                            {{.ExpiresAt.Format "2006-01-02 15:04:05"}}
                         {{end}}
                     </td>
+                    <td>{{.ViewOnce}}</td>
+                    <td>{{.Viewed}}</td>
                 </tr>
                 {{else}}
                 <tr>
-                    <td colspan="7">No pasties available.</td>
+                    <td colspan="5" class="text-center">No pasties found</td>
                 </tr>
                 {{end}}
             </tbody>
