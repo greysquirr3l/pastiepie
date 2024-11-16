@@ -74,7 +74,7 @@ func main() {
 	r.HandleFunc("/healthz", healthCheckHandler).Methods("GET")
 	r.PathPrefix("/static/").Handler(http.StripPrefix("/static/", http.FileServer(http.Dir("./static/"))))
 
-	// Start the HTTP server
+	// Start the HTTP server on port 8081
 	log.Info("PastiePie server starting at :8081")
 	if err := http.ListenAndServe(":8081", handlers.ProxyHeaders(r)); err != nil {
 		log.Fatalf("Failed to start server: %v", err)
