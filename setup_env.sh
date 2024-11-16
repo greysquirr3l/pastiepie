@@ -20,18 +20,21 @@ for VAR in "${REQUIRED_VARS[@]}"; do
   echo "$VAR=$VALUE" >> $ENV_FILE
 done
 
+# Debugging output
+echo "DB_PATH value: $(printenv DB_PATH)"
+
 # Write values to config.yml
 echo "Writing variables to $CONFIG_FILE..."
 cat <<EOL > $CONFIG_FILE
 log_level: "$(printenv LOG_LEVEL)"
 aes_key: "$(printenv MASTER_KEY)"
-db_path: "$(printenv DB_PATH)"  # Path is always quoted to handle spaces/special characters
+db_path: "$(printenv DB_PATH)"
 port: "$(printenv PORT)"
 EOL
 
-# Check for errors in writing to config.yml
-if [ $? -ne 0 ]; then
-  echo "Error: Failed to write to $CONFIG_FILE. Exiting."
+# Validate config.yml
+if ! grep -q "db_path: " $CONFIG_FILE; then
+  echo "Error: db_path is missing or empty in $CONFIG_FILE."
   exit 1
 fi
 
@@ -39,13 +42,10 @@ fi
 echo "Clearing temporary .env file..."
 rm -f $ENV_FILE
 
-# Check for errors in clearing .env
 if [ $? -ne 0 ]; then
   echo "Warning: Failed to delete temporary .env file. Please remove it manually."
 else
   echo "Temporary .env file cleared."
 fi
 
-echo "LOG_LEVEL value: $(printenv LOG_LEVEL)"
-echo "DB_PATH value: $(printenv DB_PATH)"
 echo "Environment variables successfully written to $CONFIG_FILE."
