@@ -290,19 +290,87 @@ func getPaste(w http.ResponseWriter, r *http.Request) {
 	tmpl.Execute(w, map[string]string{"Content": decryptedContent})
 }
 
+//func adminPasties(w http.ResponseWriter, r *http.Request) {
+//	var pasties []Pastie
+//	if err := db.Find(&pasties).Error; err != nil {
+///		http.Error(w, "Failed to retrieve pasties", http.StatusInternalServerError)
+//		return
+//	}
+
+//	tmpl, err := template.ParseFiles("templates/admin.html")
+//	if err != nil {
+//		http.Error(w, "Error loading admin template", http.StatusInternalServerError)
+//		return
+//	}
+//	tmpl.Execute(w, pasties)
+//}
+
 func adminPasties(w http.ResponseWriter, r *http.Request) {
+	// Define a struct to include the AESKey along with Pastie details
+	type PastieWithKey struct {
+		ID        string
+		CreatedAt time.Time
+		ExpiresAt time.Time
+		ViewOnce  bool
+		Viewed    bool
+		AESKey    string
+	}
+
 	var pasties []Pastie
+	// Query all pasties from the database
 	if err := db.Find(&pasties).Error; err != nil {
 		http.Error(w, "Failed to retrieve pasties", http.StatusInternalServerError)
 		return
 	}
 
+	// Fetch MASTER_KEY for AES decryption
+	masterKey := os.Getenv("MASTER_KEY")
+	if len(masterKey) != 32 {
+		http.Error(w, "Invalid MASTER_KEY length; must be 32 bytes.", http.StatusInternalServerError)
+		return
+	}
+
+	// Create a slice to hold pasties with decrypted AES keys
+	var pastiesWithKeys []PastieWithKey
+
+	// Loop through each pastie and add the decrypted AES key
+	for _, pastie := range pasties {
+		var storedKey AppConfig
+		if err := db.First(&storedKey, "key_id = ?", "aes_key").Error; err != nil {
+			// Log the error and skip the pastie if AES key retrieval fails
+			log.Printf("Failed to retrieve AES key for pastie ID %s: %v", pastie.ID, err)
+			continue
+		}
+
+		// Decrypt the AES key
+		decryptedKey, err := DecryptAES(storedKey.EncryptedAESKey, masterKey)
+		if err != nil {
+			log.Printf("Failed to decrypt AES key for pastie ID %s: %v", pastie.ID, err)
+			continue
+		}
+
+		// Add the pastie with its decrypted AES key to the slice
+		pastiesWithKeys = append(pastiesWithKeys, PastieWithKey{
+			ID:        pastie.ID,
+			CreatedAt: pastie.CreatedAt,
+			ExpiresAt: pastie.ExpiresAt,
+			ViewOnce:  pastie.ViewOnce,
+			Viewed:    pastie.Viewed,
+			AESKey:    decryptedKey,
+		})
+	}
+
+	// Parse the admin.html template
 	tmpl, err := template.ParseFiles("templates/admin.html")
 	if err != nil {
 		http.Error(w, "Error loading admin template", http.StatusInternalServerError)
 		return
 	}
-	tmpl.Execute(w, pasties)
+
+	// Execute the template with the pastiesWithKeys data
+	if err := tmpl.Execute(w, pastiesWithKeys); err != nil {
+		http.Error(w, "Error rendering admin page", http.StatusInternalServerError)
+	}
 }
 
 func healthCheck(w http.ResponseWriter, r *http.Request) {

@@ -12,6 +12,30 @@
         .container {
             margin-top: 40px;
         }
+        .key-container {
+            position: relative;
+        }
+        .aes-key {
+            display: none;
+            background-color: #f8f9fa;
+            border: 1px solid #ced4da;
+            padding: 5px;
+            border-radius: 5px;
+            font-family: monospace;
+            position: absolute;
+            z-index: 10;
+            top: 30px;
+            left: 0;
+            box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
+        }
+        .view-key {
+            cursor: pointer;
+            color: #007bff;
+            text-decoration: underline;
+        }
+        .view-key:hover {
+            color: #0056b3;
+        }
     </style>
     <title>Admin - View All Pasties</title>
 </head>
@@ -26,6 +50,7 @@
                     <th>Expires At</th>
                     <th>View Once</th>
                     <th>Viewed</th>
+                    <th>AES Key</th>
                 </tr>
             </thead>
             <tbody>
@@ -42,15 +67,32 @@
                     </td>
                     <td>{{.ViewOnce}}</td>
                     <td>{{.Viewed}}</td>
+                    <td>
+                        <div class="key-container">
+                            <span class="view-key" onclick="toggleKey(this)">Click to View</span>
+                            <div class="aes-key">{{.AESKey}}</div>
+                        </div>
+                    </td>
                 </tr>
                 {{else}}
                 <tr>
-                    <td colspan="5" class="text-center">No pasties found</td>
+                    <td colspan="6" class="text-center">No pasties found</td>
                 </tr>
                 {{end}}
             </tbody>
         </table>
     </div>
     <script src="/static/js/bootstrap.bundle.min.js"></script>
+    <script>
+        // Toggles the visibility of the AES key
+        function toggleKey(element) {
+            const keyDiv = element.nextElementSibling;
+            if (keyDiv.style.display === "none" || keyDiv.style.display === "") {
+                keyDiv.style.display = "block";
+            } else {
+                keyDiv.style.display = "none";
+            }
+        }
+    </script>
 </body>
 </html>
