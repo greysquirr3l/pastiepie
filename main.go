@@ -60,8 +60,8 @@ func main() {
 
 	log.Println("Starting application...")
 
-	initConfig()
 	initDatabase()
+	initConfig()
 	defer func() {
 		sqlDB, _ := db.DB()
 		sqlDB.Close()
