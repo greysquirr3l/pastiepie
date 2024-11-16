@@ -1,5 +1,3 @@
-// pastiepien
-
 package main
 
 import (
@@ -67,16 +65,18 @@ func main() {
 	// Start cleanup routine for expired pasties
 	startExpiredPastiesCleanup(10 * time.Minute)
 
-	// Start an HTTP server
+	// Set up routes
 	r := mux.NewRouter()
 	r.HandleFunc("/", serveCreateForm).Methods("GET")
 	r.HandleFunc("/pastie", createPaste).Methods("POST")
 	r.HandleFunc("/pastie/{id}", getPaste).Methods("GET", "POST")
 	r.HandleFunc("/admin/pasties", adminPasties).Methods("GET")
+	r.HandleFunc("/healthz", healthCheckHandler).Methods("GET")
 	r.PathPrefix("/static/").Handler(http.StripPrefix("/static/", http.FileServer(http.Dir("./static/"))))
 
-	log.Info("PastiePie server starting at :8080")
-	if err := http.ListenAndServe(":8080", handlers.CORS(handlers.AllowedOrigins([]string{"*"}))(r)); err != nil {
+	// Start the HTTP server
+	log.Info("PastiePie server starting at :8081")
+	if err := http.ListenAndServe(":8081", handlers.ProxyHeaders(r)); err != nil {
 		log.Fatalf("Failed to start server: %v", err)
 	}
 }
@@ -281,6 +281,11 @@ func adminPasties(w http.ResponseWriter, r *http.Request) {
 	}
 
 	tmpl.Execute(w, pasties)
+}
+
+func healthCheckHandler(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusOK)
+	fmt.Fprintln(w, "OK")
 }
 
 func startExpiredPastiesCleanup(interval time.Duration) {
