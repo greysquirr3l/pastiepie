@@ -227,8 +227,8 @@ func getPaste(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Handle password-protected pastie
 	if pastie.PasswordHash != "" {
-		// Show password prompt form if this is a GET request
 		if r.Method == http.MethodGet {
 			tmpl, err := template.ParseFiles("templates/password_prompt.html")
 			if err != nil {
@@ -239,7 +239,6 @@ func getPaste(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		// For POST request, validate the provided password
 		if r.Method == http.MethodPost {
 			password := r.FormValue("password")
 			if password == "" {
@@ -260,14 +259,18 @@ func getPaste(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Mark pastie as viewed if it is a view-once pastie
+	// Mark pastie as viewed if it is a "view-once" pastie and delete it
 	if pastie.ViewOnce {
 		pastie.Viewed = true
-		db.Delete(&pastie)
-	} else {
-		db.Save(&pastie)
+		if err := db.Save(&pastie).Error; err != nil {
+			log.Errorf("Failed to update pastie as viewed: %v", err)
+			http.Error(w, "Failed to update pastie state", http.StatusInternalServerError)
+			return
+		}
+		db.Delete(&pastie) // Delete the pastie right after saving the viewed state
 	}
 
+	// Render the pastie content
 	tmpl, err := template.ParseFiles("templates/view_pastie.html")
 	if err != nil {
 		http.Error(w, "Error loading view pastie template", http.StatusInternalServerError)
