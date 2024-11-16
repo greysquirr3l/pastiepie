@@ -82,6 +82,7 @@ func main() {
 	r.HandleFunc("/pastie", createPaste).Methods("POST")
 	r.HandleFunc("/pastie/{id}", getPaste).Methods("GET", "POST")
 	r.HandleFunc("/admin/pasties", adminPasties).Methods("GET")
+	r.HandleFunc("/healthz", healthCheck).Methods("GET")
 	r.PathPrefix("/static/").Handler(http.StripPrefix("/static/", http.FileServer(http.Dir("./static/"))))
 
 	log.Infof("PastiePie server starting at :8443 (HTTPS), cert: %s, key: %s", config.SSLCertPath, config.SSLKeyPath)
@@ -396,4 +397,9 @@ func decrypt(cipherText, key string) (string, error) {
 	stream.XORKeyStream(decodedCipherText, decodedCipherText)
 
 	return string(decodedCipherText), nil
+}
+
+func healthCheck(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte("OK"))
 }
