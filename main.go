@@ -222,7 +222,7 @@ func getPaste(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Check if the pastie has been viewed already if it is a "view-once" pastie
+	// If the pastie is view-once and already viewed, it should not be accessible
 	if pastie.ViewOnce && pastie.Viewed {
 		http.Error(w, "Pastie not found", http.StatusNotFound)
 		return
@@ -241,7 +241,6 @@ func getPaste(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		// Validate the provided password if it's a POST request
 		if r.Method == http.MethodPost {
 			password := r.FormValue("password")
 			if password == "" {
@@ -262,9 +261,16 @@ func getPaste(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Mark pastie as viewed and delete immediately if it is a "view-once" pastie
+	// For view-once pasties, mark as viewed and delete immediately
 	if pastie.ViewOnce {
-		// Delete the pastie immediately after viewing
+		// Mark as viewed and delete in a single transaction
+		pastie.Viewed = true
+		if err := db.Save(&pastie).Error; err != nil {
+			log.Errorf("Failed to mark pastie as viewed: %v", err)
+			http.Error(w, "Failed to update pastie state", http.StatusInternalServerError)
+			return
+		}
+
 		if err := db.Delete(&pastie).Error; err != nil {
 			log.Errorf("Failed to delete view-once pastie: %v", err)
 			http.Error(w, "Failed to delete pastie after viewing", http.StatusInternalServerError)
