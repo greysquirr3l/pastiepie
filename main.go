@@ -62,6 +62,7 @@ func main() {
 
 	initDatabase()
 	initConfig()
+
 	defer func() {
 		sqlDB, _ := db.DB()
 		sqlDB.Close()
@@ -96,6 +97,11 @@ func initConfig() {
 	masterKey := os.Getenv("MASTER_KEY")
 	if len(masterKey) != 32 {
 		log.Fatalf("MASTER_KEY must be 32 bytes for AES-256 encryption. Current length: %d", len(masterKey))
+	}
+
+	// Ensure the database is initialized before querying
+	if db == nil {
+		log.Fatalf("Database is not initialized. Ensure initDatabase() is called before initConfig().")
 	}
 
 	log.Println("Verifying AES key in database...")
