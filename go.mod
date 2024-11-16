@@ -1,4 +1,4 @@
-module main.go
+module pastiepie
 
 go 1.23.2
 
