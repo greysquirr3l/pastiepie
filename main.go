@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"html"
 	"html/template"
@@ -18,6 +19,7 @@ import (
 	"github.com/gorilla/mux"
 	"github.com/gtank/cryptopasta"
 	"github.com/sirupsen/logrus"
+	"github.com/spf13/viper"
 	"golang.org/x/crypto/bcrypt"
 	"golang.org/x/time/rate"
 	"gorm.io/gorm"
@@ -161,35 +163,59 @@ func initLogger() {
 	appLogger.Info("Logger initialized.")
 }
 
-// Database Initialization
-func initDatabase() {
-	appLogger.Info("Initializing database...")
-
-	if config.DBPath == "" {
-		appLogger.Fatalf("Database path is empty. Check your config file or environment variables.")
+// Generate AES Key
+func generateAESKey() [32]byte {
+	var key [32]byte
+	if _, err := rand.Read(key[:]); err != nil {
+		appLogger.Fatalf("Failed to generate AES key: %v", err)
 	}
+	return key
+}
 
-	if _, err := os.Stat(config.DBPath); os.IsNotExist(err) {
-		appLogger.Infof("Data directory does not exist at %s. Creating it...", config.DBPath)
-		if err := os.MkdirAll(config.DBPath, os.ModePerm); err != nil {
-			appLogger.Fatalf("Failed to create data directory: %v", err)
+// Store AES Key in the Database
+func storeAESKey(aesKey [32]byte, masterKey string) {
+	encryptedAESKey, err := cryptopasta.Encrypt(aesKey[:], (*[32]byte)([]byte(masterKey)))
+	if err != nil {
+		appLogger.Fatalf("Failed to encrypt the AES key: %v", err)
+	}
+	encryptedAESKeyString := base64.StdEncoding.EncodeToString(encryptedAESKey)
+
+	var storedKey AppConfig
+	result := db.First(&storedKey, "key_id = ?", "aes_key")
+	if errors.Is(result.Error, gorm.ErrRecordNotFound) {
+		storedKey = AppConfig{
+			KeyID:           "aes_key",
+			EncryptedAESKey: encryptedAESKeyString,
+		}
+		if err := db.Create(&storedKey).Error; err != nil {
+			appLogger.Fatalf("Failed to store AES key in database: %v", err)
+		}
+	} else {
+		storedKey.EncryptedAESKey = encryptedAESKeyString
+		if err := db.Save(&storedKey).Error; err != nil {
+			appLogger.Fatalf("Failed to update AES key in database: %v", err)
 		}
 	}
+	appLogger.Info("AES key successfully stored in the database.")
+}
 
-	dbFilePath := fmt.Sprintf("%s/pasties.db", config.DBPath)
-	appLogger.Infof("Using database file: %s", dbFilePath)
+// Start Expired Pasties Cleanup
+func startExpiredPastiesCleanup(interval time.Duration) {
+	appLogger.Infof("Starting expired pasties cleanup routine. Interval: %s", interval)
 
-	var err error
-	db, err = gorm.Open(sqlite.Open(dbFilePath), &gorm.Config{})
-	if err != nil {
-		appLogger.Fatalf("Failed to connect to database: %v", err)
-	}
+	ticker := time.NewTicker(interval)
 
-	appLogger.Info("Applying database migrations...")
-	if err := db.AutoMigrate(&Pastie{}, &AppConfig{}); err != nil {
-		appLogger.Fatalf("Failed to migrate database: %v", err)
-	}
-	appLogger.Info("Database initialized successfully.")
+	go func() {
+		for range ticker.C {
+			appLogger.Info("Running cleanup for expired pasties...")
+			err := db.Where("expires_at <= ? AND expires_at != ?", time.Now().UTC(), time.Time{}).Delete(&Pastie{}).Error
+			if err != nil {
+				appLogger.Errorf("Failed to clean up expired pasties: %v", err)
+			} else {
+				appLogger.Info("Expired pasties cleanup completed successfully.")
+			}
+		}
+	}()
 }
 
 func setupRouter() *mux.Router {
@@ -210,12 +236,6 @@ func setupRouter() *mux.Router {
 	return r
 }
 
-// Health Check Handler
-func healthCheck(w http.ResponseWriter, r *http.Request) {
-	w.WriteHeader(http.StatusOK)
-	w.Write([]byte("OK"))
-}
-
 // Serve Create Form Handler
 func serveCreateForm(w http.ResponseWriter, r *http.Request) {
 	tmpl, err := template.ParseFiles("templates/form.html")
@@ -226,98 +246,7 @@ func serveCreateForm(w http.ResponseWriter, r *http.Request) {
 	tmpl.Execute(w, nil)
 }
 
-// Render Error Page
-func renderErrorPage(w http.ResponseWriter, message string, statusCode int) {
-	tmpl, err := template.ParseFiles("templates/error.html")
-	if err != nil {
-		appLogger.Errorf("Error loading error.html template: %v", err)
-		http.Error(w, "An unexpected error occurred", http.StatusInternalServerError)
-		return
-	}
-
-	w.WriteHeader(statusCode)
-	err = tmpl.Execute(w, map[string]string{"ErrorMessage": message})
-	if err != nil {
-		appLogger.Errorf("Failed to execute error template: %v", err)
-		http.Error(w, "An unexpected error occurred", http.StatusInternalServerError)
-	}
-}
-
-func getPaste(w http.ResponseWriter, r *http.Request) {
-	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
-	defer cancel()
-
-	id := mux.Vars(r)["id"]
-
-	var pastie Pastie
-	if err := db.WithContext(ctx).First(&pastie, "id = ?", id).Error; err != nil {
-		appLogger.Errorf("Failed to find pastie: %v", err)
-		renderErrorPage(w, "Pastie not found", http.StatusNotFound)
-		return
-	}
-
-	// Handle password-protected pastie
-	if pastie.PasswordHash != "" && r.Method != http.MethodPost {
-		tmpl, err := template.ParseFiles("templates/password_prompt.html")
-		if err != nil {
-			appLogger.Errorf("Failed to load password prompt template: %v", err)
-			renderErrorPage(w, "Failed to load password prompt page", http.StatusInternalServerError)
-			return
-		}
-		tmpl.Execute(w, map[string]string{"PastieID": id})
-		return
-	}
-
-	// Validate the password if the pastie is password-protected
-	if pastie.PasswordHash != "" {
-		password := r.FormValue("password")
-		if err := bcrypt.CompareHashAndPassword([]byte(pastie.PasswordHash), []byte(password)); err != nil {
-			appLogger.Warnf("Password validation failed for pastie %s: %v", id, err)
-			renderErrorPage(w, "Incorrect password", http.StatusUnauthorized)
-			return
-		}
-	}
-
-	// Decrypt content
-	cipherBytes, err := base64.StdEncoding.DecodeString(pastie.Content)
-	if err != nil {
-		appLogger.Errorf("Failed to decode content for pastie %s: %v", id, err)
-		renderErrorPage(w, "Failed to decode content", http.StatusInternalServerError)
-		return
-	}
-
-	var aesKey [32]byte
-	copy(aesKey[:], config.AESKey[:])
-
-	decryptedContent, err := cryptopasta.Decrypt(cipherBytes, &aesKey)
-	if err != nil {
-		appLogger.Errorf("Failed to decrypt content for pastie %s: %v", id, err)
-		renderErrorPage(w, "Failed to decrypt content", http.StatusInternalServerError)
-		return
-	}
-
-	// Update the viewed status for pasties
-	if !pastie.Viewed || pastie.ViewOnce {
-		pastie.Viewed = true
-		if pastie.ViewOnce {
-			if err := db.WithContext(ctx).Delete(&pastie).Error; err != nil {
-				appLogger.Errorf("Failed to delete one-time pastie %s: %v", id, err)
-			}
-		} else {
-			if err := db.WithContext(ctx).Save(&pastie).Error; err != nil {
-				appLogger.Errorf("Failed to update pastie %s as viewed: %v", id, err)
-			}
-		}
-	}
-
-	tmpl, err := template.ParseFiles("templates/view_pastie.html")
-	if err != nil {
-		renderErrorPage(w, "Error loading template", http.StatusInternalServerError)
-		return
-	}
-	tmpl.Execute(w, map[string]string{"Content": string(decryptedContent)})
-}
-
+// Create Paste Handler
 func createPaste(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
@@ -420,4 +349,246 @@ func createPaste(w http.ResponseWriter, r *http.Request) {
 		renderErrorPage(w, "Error rendering share link page", http.StatusInternalServerError)
 		return
 	}
+}
+
+// Get Paste Handler
+func getPaste(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+
+	id := mux.Vars(r)["id"]
+
+	var pastie Pastie
+	if err := db.WithContext(ctx).First(&pastie, "id = ?", id).Error; err != nil {
+		appLogger.Errorf("Failed to find pastie: %v", err)
+		renderErrorPage(w, "Pastie not found", http.StatusNotFound)
+		return
+	}
+
+	// Handle password-protected pastie
+	if pastie.PasswordHash != "" && r.Method != http.MethodPost {
+		tmpl, err := template.ParseFiles("templates/password_prompt.html")
+		if err != nil {
+			appLogger.Errorf("Failed to load password prompt template: %v", err)
+			renderErrorPage(w, "Failed to load password prompt page", http.StatusInternalServerError)
+			return
+		}
+		tmpl.Execute(w, map[string]string{"PastieID": id})
+		return
+	}
+
+	// Validate the password if the pastie is password-protected
+	if pastie.PasswordHash != "" {
+		password := r.FormValue("password")
+		if err := bcrypt.CompareHashAndPassword([]byte(pastie.PasswordHash), []byte(password)); err != nil {
+			appLogger.Warnf("Password validation failed for pastie %s: %v", id, err)
+			renderErrorPage(w, "Incorrect password", http.StatusUnauthorized)
+			return
+		}
+	}
+
+	// Decrypt content
+	cipherBytes, err := base64.StdEncoding.DecodeString(pastie.Content)
+	if err != nil {
+		appLogger.Errorf("Failed to decode content for pastie %s: %v", id, err)
+		renderErrorPage(w, "Failed to decode content", http.StatusInternalServerError)
+		return
+	}
+
+	var aesKey [32]byte
+	copy(aesKey[:], config.AESKey[:])
+
+	decryptedContent, err := cryptopasta.Decrypt(cipherBytes, &aesKey)
+	if err != nil {
+		appLogger.Errorf("Failed to decrypt content for pastie %s: %v", id, err)
+		renderErrorPage(w, "Failed to decrypt content", http.StatusInternalServerError)
+		return
+	}
+
+	// Update the viewed status for pasties
+	if !pastie.Viewed || pastie.ViewOnce {
+		pastie.Viewed = true
+		if pastie.ViewOnce {
+			if err := db.WithContext(ctx).Delete(&pastie).Error; err != nil {
+				appLogger.Errorf("Failed to delete one-time pastie %s: %v", id, err)
+			}
+		} else {
+			if err := db.WithContext(ctx).Save(&pastie).Error; err != nil {
+				appLogger.Errorf("Failed to update pastie %s as viewed: %v", id, err)
+			}
+		}
+	}
+
+	tmpl, err := template.ParseFiles("templates/view_pastie.html")
+	if err != nil {
+		renderErrorPage(w, "Error loading template", http.StatusInternalServerError)
+		return
+	}
+	tmpl.Execute(w, map[string]string{"Content": string(decryptedContent)})
+}
+
+// Admin Handler to View All Pasties
+func adminPasties(w http.ResponseWriter, r *http.Request) {
+	var pasties []Pastie
+	if err := db.Find(&pasties).Error; err != nil {
+		renderErrorPage(w, "Failed to load pasties", http.StatusInternalServerError)
+		return
+	}
+
+	tmpl, err := template.ParseFiles("templates/admin.html")
+	if err != nil {
+		renderErrorPage(w, "Failed to load admin page", http.StatusInternalServerError)
+		return
+	}
+	err = tmpl.Execute(w, pasties)
+	if err != nil {
+		appLogger.Errorf("Failed to execute admin template: %v", err)
+		renderErrorPage(w, "Failed to render admin page", http.StatusInternalServerError)
+		return
+	}
+}
+
+// Delete Specific Pastie Handler
+func deletePastieHandler(w http.ResponseWriter, r *http.Request) {
+	id := mux.Vars(r)["id"]
+	if err := db.Delete(&Pastie{}, "id = ?", id).Error; err != nil {
+		appLogger.Errorf("Failed to delete pastie: %s, %v", id, err)
+		renderErrorPage(w, "Failed to delete pastie", http.StatusInternalServerError)
+		return
+	}
+	http.Redirect(w, r, "/admin/pasties", http.StatusSeeOther)
+}
+
+// Delete All Pasties Handler
+func deleteAllPastiesHandler(w http.ResponseWriter, r *http.Request) {
+	if err := db.Where("expires_at <= ? AND expires_at != ?", time.Now().UTC(), time.Time{}).Delete(&Pastie{}).Error; err != nil {
+		appLogger.Errorf("Failed to delete all pasties: %v", err)
+		renderErrorPage(w, "Failed to delete all pasties", http.StatusInternalServerError)
+		return
+	}
+	http.Redirect(w, r, "/admin/pasties", http.StatusSeeOther)
+}
+
+// Health Check Handler
+func healthCheck(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte("OK"))
+}
+
+// Regenerate AES Key Handler
+func regenerateAESKeyHandler(w http.ResponseWriter, r *http.Request) {
+	newAESKey := generateAESKey()
+	masterKey := os.Getenv("MASTER_KEY")
+	storeAESKey(newAESKey, masterKey)
+	copy(config.AESKey[:], newAESKey[:])
+	appLogger.Info("Successfully regenerated and updated the AES key.")
+
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte("AES key successfully regenerated."))
+}
+
+// Render Error Page
+func renderErrorPage(w http.ResponseWriter, message string, statusCode int) {
+	tmpl, err := template.ParseFiles("templates/error.html")
+	if err != nil {
+		appLogger.Errorf("Error loading error.html template: %v", err)
+		http.Error(w, "An unexpected error occurred", http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(statusCode)
+	err = tmpl.Execute(w, map[string]string{"ErrorMessage": message})
+	if err != nil {
+		appLogger.Errorf("Failed to execute error template: %v", err)
+		http.Error(w, "An unexpected error occurred", http.StatusInternalServerError)
+	}
+}
+
+// Database Initialization
+func initDatabase() {
+	appLogger.Info("Initializing database...")
+
+	if config.DBPath == "" {
+		appLogger.Fatalf("Database path is empty. Check your config file or environment variables.")
+	}
+
+	if _, err := os.Stat(config.DBPath); os.IsNotExist(err) {
+		appLogger.Infof("Data directory does not exist at %s. Creating it...", config.DBPath)
+		if err := os.MkdirAll(config.DBPath, os.ModePerm); err != nil {
+			appLogger.Fatalf("Failed to create data directory: %v", err)
+		}
+	}
+
+	dbFilePath := fmt.Sprintf("%s/pasties.db", config.DBPath)
+	appLogger.Infof("Using database file: %s", dbFilePath)
+
+	var err error
+	db, err = gorm.Open(sqlite.Open(dbFilePath), &gorm.Config{})
+	if err != nil {
+		appLogger.Fatalf("Failed to connect to database: %v", err)
+	}
+
+	appLogger.Info("Applying database migrations...")
+	if err := db.AutoMigrate(&Pastie{}, &AppConfig{}); err != nil {
+		appLogger.Fatalf("Failed to migrate database: %v", err)
+	}
+	appLogger.Info("Database initialized successfully.")
+}
+
+// Configuration Initialization
+func initConfig(loadOnly bool) {
+	appLogger.Info("Initializing configuration...")
+
+	viper.SetConfigFile("/root/config.yml")
+	viper.SetConfigType("yaml")
+
+	if err := viper.ReadInConfig(); err != nil {
+		appLogger.Fatalf("Error reading config file: %v", err)
+	}
+
+	config.LogLevel = viper.GetString("log_level")
+	config.DBPath = viper.GetString("db_path")
+	config.Port = viper.GetString("port")
+
+	appLogger.Infof("Loaded configuration: LogLevel=%s, DBPath=%s, Port=%s", config.LogLevel, config.DBPath, config.Port)
+
+	if loadOnly {
+		return
+	}
+
+	masterKey := os.Getenv("MASTER_KEY")
+	if len(masterKey) != 32 {
+		appLogger.Fatalf("MASTER_KEY must be 32 bytes for AES-256 encryption.")
+	}
+
+	var storedKey AppConfig
+	result := db.First(&storedKey, "key_id = ?", "aes_key")
+	if errors.Is(result.Error, gorm.ErrRecordNotFound) {
+		appLogger.Info("No AES key found, generating a new one...")
+		aesKey := generateAESKey()
+		copy(config.AESKey[:], aesKey[:])
+		storeAESKey(config.AESKey, masterKey)
+	} else if result.Error != nil {
+		appLogger.Fatalf("Failed to query database for AES key: %v", result.Error)
+	} else {
+		appLogger.Info("AES key found in database. Decrypting...")
+		encryptedAESKeyBytes, err := base64.StdEncoding.DecodeString(storedKey.EncryptedAESKey)
+		if err != nil {
+			appLogger.Fatalf("Failed to decode stored AES key: %v", err)
+		}
+		decryptedAESKeyBytes, err := cryptopasta.Decrypt(encryptedAESKeyBytes, (*[32]byte)([]byte(masterKey)))
+		if err != nil {
+			appLogger.Fatalf("Failed to decrypt stored AES key: %v", err)
+		}
+		copy(config.AESKey[:], decryptedAESKeyBytes[:])
+		appLogger.Info("Loaded AES key from database.")
+	}
+}
+
+// Format Duration to Human-Readable String
+func formatDuration(d time.Duration) string {
+	h := int64(d.Hours())
+	m := int64(d.Minutes()) % 60
+	s := int64(d.Seconds()) % 60
+	return fmt.Sprintf("%dh%dm%ds", h, m, s)
 }
