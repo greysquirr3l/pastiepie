@@ -430,11 +430,12 @@ func getPaste(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Convert AESKey to *[32]byte
-	aesKeyPtr := (*[32]byte)(&config.AESKey)
+	// Copy the AES key into a new variable of type [32]byte
+	var aesKey [32]byte
+	copy(aesKey[:], config.AESKey[:])
 
-	// Decrypt the content using the AES key
-	decryptedContent, err := cryptopasta.Decrypt(cipherBytes, aesKeyPtr)
+	// Decrypt the content using the AES key pointer
+	decryptedContent, err := cryptopasta.Decrypt(cipherBytes, &aesKey)
 	if err != nil {
 		renderErrorPage(w, "Failed to decrypt content", http.StatusInternalServerError)
 		return
