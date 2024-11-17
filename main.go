@@ -247,6 +247,8 @@ func createPaste(w http.ResponseWriter, r *http.Request) {
 	sanitizedContent := html.EscapeString(content)
 	encryptedContent, err := encrypt(sanitizedContent, config.AESKey)
 	if err != nil {
+		log.Printf("Encryption failed: %v", err)
+		log.Printf("AES Key Length: %d", len(config.AESKey))
 		http.Error(w, "Failed to encrypt content", http.StatusInternalServerError)
 		return
 	}
