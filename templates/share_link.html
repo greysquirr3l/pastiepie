@@ -24,15 +24,11 @@
             box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
             text-align: center;
         }
-        .form-control {
-            font-family: inherit;
-        }
-        .input-group {
-            position: relative;
-        }
-        .input-group .form-control:focus {
-            border-color: #28a745; /* Green border when focused */
-            box-shadow: 0 0 0 0.2rem rgba(40, 167, 69, 0.25);
+        #copySuccess {
+            display: none;
+            color: green;
+            font-weight: bold;
+            margin-top: 10px;
         }
     </style>
 </head>
@@ -41,34 +37,32 @@
         <img src="/static/images/logo.png" alt="Pastie Pie Logo" class="img-fluid mb-4">
         <h1 class="mb-4">Share Your Pastie Link</h1>
         <div class="input-group mb-3">
-            <input type="text" id="pastieLink" class="form-control" value="{{.Link}}" readonly>
+            <input type="text" id="pastieLink" class="form-control" value="{{.Link}}" readonly onclick="this.select();">
             <button class="btn btn-secondary" onclick="copyToClipboard()">Copy</button>
         </div>
+        <div id="copySuccess">Link copied successfully!</div>
         <ul class="list-unstyled text-start">
             <li><strong>Password Protected:</strong> {{if .PasswordProtected}}Yes{{else}}No{{end}}</li>
-            <li><strong>Timeout:</strong> {{.TimeoutRemaining}}</li>
-            {{if eq .ViewOnce "true"}}<li><strong>View Limit:</strong> One-time view only</li>{{end}}
+            <li><strong>Timeout:</strong> {{if eq .TimeoutRemaining "0s"}}Never{{else}}{{.TimeoutRemaining}}{{end}}</li>
+            {{if eq .ViewOnce true}}<li><strong>View Limit:</strong> One-time view only</li>{{end}}
         </ul>
     </div>
     <script>
         function copyToClipboard() {
-            const copyText = document.getElementById("pastieLink");
+            const copyText = document.getElementById("pastieLink").value;
+            navigator.clipboard.writeText(copyText)
+                .then(() => {
+                    const copySuccess = document.getElementById("copySuccess");
+                    copySuccess.style.display = "block";
 
-            // Select and copy the text
-            copyText.select();
-            copyText.setSelectionRange(0, 99999); // For mobile compatibility
-            document.execCommand("copy");
-
-            // Change the text temporarily to "Copied!"
-            const originalValue = copyText.value;
-            copyText.value = "Copied!";
-            copyText.classList.add("is-valid"); // Bootstrap green highlight
-
-            // Restore the original text after a short delay
-            setTimeout(() => {
-                copyText.value = originalValue;
-                copyText.classList.remove("is-valid");
-            }, 1500); // Delay of 1.5 seconds
+                    // Hide the message after 2 seconds
+                    setTimeout(() => {
+                        copySuccess.style.display = "none";
+                    }, 2000);
+                })
+                .catch(err => {
+                    console.error('Could not copy text: ', err);
+                });
         }
     </script>
     <script src="/static/js/bootstrap.bundle.min.js"></script>
