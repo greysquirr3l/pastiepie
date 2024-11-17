@@ -1,5 +1,6 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -16,6 +17,7 @@
             min-height: 100vh;
             margin: 0;
         }
+
         .container {
             background: #ffffff;
             border-radius: 10px;
@@ -25,29 +27,46 @@
             box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
             text-align: center;
         }
+
         .form-control {
             font-family: inherit;
         }
+
         .options-row {
             display: flex;
             align-items: center;
             justify-content: space-between;
             margin-bottom: 15px;
+            gap: 20px;
         }
+
         .password-field {
             margin-top: 15px;
         }
+
         .btn-create {
             background-color: #e8d8c3;
             color: #333;
             border: none;
             font-size: 1.2rem;
         }
+
         .btn-create:hover {
             background-color: #d2c1ac;
         }
+
+        .form-label-inline {
+            margin-right: 10px;
+            white-space: nowrap;
+        }
+
+        .expiration-group {
+            display: flex;
+            align-items: center;
+        }
     </style>
 </head>
+
 <body>
     <div class="container">
         <img src="/static/images/logo_tp-min.png" alt="Pastie Pie Logo" class="img-fluid mb-4">
@@ -56,14 +75,15 @@
             <!-- Textarea for the content -->
             <div class="form-group">
                 <label for="content" class="form-label">Enter your text here:</label>
-                <textarea id="content" name="content" class="form-control" rows="5" placeholder="Enter your text here..." required></textarea>
+                <textarea id="content" name="content" class="form-control" rows="5" placeholder="Enter your text here..."
+                    required></textarea>
             </div>
 
             <!-- Options for Expiration, View Once, and Password Protect -->
             <div class="options-row">
-                <!-- Expiration Dropdown on the left -->
-                <div class="form-group">
-                    <label for="expiration" class="form-label">Expiration:</label>
+                <!-- Expiration Dropdown with label on the same line -->
+                <div class="expiration-group">
+                    <label for="expiration" class="form-label-inline">Expiration: </label>
                     <select id="expiration" name="expiration" class="form-select">
                         <option value="5min">5 Minutes</option>
                         <option value="30min">30 Minutes</option>
@@ -74,13 +94,13 @@
                     </select>
                 </div>
 
-                <!-- View Once Checkbox in the middle -->
+                <!-- View Once Checkbox -->
                 <div class="form-check">
                     <input class="form-check-input" type="checkbox" id="viewOnce" name="view_once" value="true">
                     <label class="form-check-label" for="viewOnce">View Once</label>
                 </div>
 
-                <!-- Password Protect Checkbox on the right -->
+                <!-- Password Protect Checkbox -->
                 <div class="form-check">
                     <input class="form-check-input" type="checkbox" id="passwordProtect" onclick="togglePasswordField()">
                     <label class="form-check-label" for="passwordProtect">Password Protect</label>
@@ -89,7 +109,8 @@
 
             <!-- Password field, hidden by default -->
             <div class="form-group password-field" id="passwordField" style="display: none;">
-                <input type="password" name="password" id="password" class="form-control" placeholder="Optional: Password protect this paste">
+                <input type="password" name="password" id="password" class="form-control"
+                    placeholder="Password protect this paste">
             </div>
 
             <!-- Submit button -->
@@ -111,4 +132,5 @@
         }
     </script>
 </body>
+
 </html>

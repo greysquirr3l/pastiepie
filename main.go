@@ -1,8 +1,6 @@
 package main
 
 import (
-	"crypto/aes"
-	"crypto/cipher"
 	"crypto/rand"
 	"encoding/base64"
 	"errors"
@@ -34,7 +32,7 @@ var (
 // Config struct to store global settings
 type Config struct {
 	LogLevel string
-	AESKey   *[32]byte
+	AESKey   [32]byte
 	DBPath   string
 	Port     string
 }
@@ -126,7 +124,7 @@ func initConfig(loadOnly bool) {
 	if errors.Is(result.Error, gorm.ErrRecordNotFound) {
 		appLogger.Info("No AES key found, generating a new one...")
 		aesKey := generateAESKey()
-		config.AESKey = aesKey
+		copy(config.AESKey[:], aesKey[:])
 		storeAESKey(config.AESKey, masterKey)
 	} else if result.Error != nil {
 		appLogger.Fatalf("Failed to query database for AES key: %v", result.Error)
@@ -136,17 +134,17 @@ func initConfig(loadOnly bool) {
 		if err != nil {
 			appLogger.Fatalf("Failed to decode stored AES key: %v", err)
 		}
-		decryptedAESKeyBytes, err := decryptAESRaw(encryptedAESKeyBytes, masterKey)
+		decryptedAESKeyBytes, err := cryptopasta.Decrypt(encryptedAESKeyBytes, (*[32]byte)([]byte(masterKey)))
 		if err != nil {
 			appLogger.Fatalf("Failed to decrypt stored AES key: %v", err)
 		}
-		config.AESKey = decryptedAESKeyBytes
+		copy(config.AESKey[:], decryptedAESKeyBytes[:])
 		appLogger.Info("Loaded AES key from database.")
 	}
 }
 
-func storeAESKey(aesKey *[32]byte, masterKey string) {
-	encryptedAESKey, err := encryptAESRaw(aesKey[:], masterKey)
+func storeAESKey(aesKey [32]byte, masterKey string) {
+	encryptedAESKey, err := cryptopasta.Encrypt(aesKey[:], (*[32]byte)([]byte(masterKey)))
 	if err != nil {
 		appLogger.Fatalf("Failed to encrypt the AES key: %v", err)
 	}
@@ -201,61 +199,10 @@ func initDatabase() {
 	appLogger.Info("Database initialized successfully.")
 }
 
-func generateAESKey() *[32]byte {
-	key := [32]byte{}
-	if _, err := rand.Read(key[:]); err != nil {
-		appLogger.Fatalf("Failed to generate AES key: %v", err)
-	}
-	appLogger.Debugf("Generated AES key: %x", key)
-	return &key
-}
-
-func encryptAESRaw(plaintext []byte, masterKey string) ([]byte, error) {
-	block, err := aes.NewCipher([]byte(masterKey))
-	if err != nil {
-		return nil, err
-	}
-
-	ciphertext := make([]byte, aes.BlockSize+len(plaintext))
-	iv := ciphertext[:aes.BlockSize]
-	if _, err := rand.Read(iv); err != nil {
-		return nil, err
-	}
-
-	stream := cipher.NewCFBEncrypter(block, iv)
-	stream.XORKeyStream(ciphertext[aes.BlockSize:], plaintext)
-	return ciphertext, nil
-}
-
-func decryptAESRaw(ciphertext []byte, masterKey string) (*[32]byte, error) {
-	block, err := aes.NewCipher([]byte(masterKey))
-	if err != nil {
-		return nil, err
-	}
-
-	if len(ciphertext) < aes.BlockSize {
-		return nil, errors.New("ciphertext too short")
-	}
-
-	iv := ciphertext[:aes.BlockSize]
-	ciphertext = ciphertext[aes.BlockSize:]
-
-	stream := cipher.NewCFBDecrypter(block, iv)
-	stream.XORKeyStream(ciphertext, ciphertext)
-
-	if len(ciphertext) != 32 {
-		return nil, errors.New("invalid AES key length after decryption")
-	}
-
-	var key [32]byte
-	copy(key[:], ciphertext)
-	return &key, nil
-}
-
 func setupRouter() *mux.Router {
 	r := mux.NewRouter()
 	r.HandleFunc("/", serveCreateForm).Methods("GET")
-	r.HandleFunc("/pastie", handlePastie).Methods("GET", "POST")
+	r.HandleFunc("/pastie", createPaste).Methods("POST")
 	r.HandleFunc("/pastie/{id}", getPaste).Methods("GET", "POST")
 	r.HandleFunc("/admin/pasties", adminPasties).Methods("GET")
 	r.HandleFunc("/admin/pasties/delete/{id}", deletePastieHandler).Methods("POST")
@@ -266,18 +213,6 @@ func setupRouter() *mux.Router {
 	return r
 }
 
-func handlePastie(w http.ResponseWriter, r *http.Request) {
-	switch r.Method {
-	case http.MethodPost:
-		createPaste(w, r) // Proceed to handle POST request for creating a pastie
-	case http.MethodGet:
-		// Redirect the user to the home page to create a new pastie
-		http.Redirect(w, r, "/", http.StatusSeeOther)
-	default:
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-	}
-}
-
 func serveCreateForm(w http.ResponseWriter, r *http.Request) {
 	tmpl, err := template.ParseFiles("templates/form.html")
 	if err != nil {
@@ -285,111 +220,6 @@ func serveCreateForm(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	tmpl.Execute(w, nil)
-}
-
-func createPaste(w http.ResponseWriter, r *http.Request) {
-	content := r.FormValue("content")
-	if content == "" {
-		renderErrorPage(w, "Content cannot be empty", http.StatusBadRequest)
-		return
-	}
-
-	// Parsing and validating expiration duration
-	viewOnce := r.FormValue("view_once") == "true"
-	expirationStr := r.FormValue("expiration")
-
-	var expiration time.Time
-	switch expirationStr {
-	case "5min":
-		expiration = time.Now().Add(5 * time.Minute)
-	case "30min":
-		expiration = time.Now().Add(30 * time.Minute)
-	case "1hour":
-		expiration = time.Now().Add(1 * time.Hour)
-	case "1day":
-		expiration = time.Now().Add(24 * time.Hour)
-	case "7days":
-		expiration = time.Now().Add(7 * 24 * time.Hour)
-	case "forever":
-		expiration = time.Time{} // Represents no expiration (forever)
-	default:
-		errorMsg := fmt.Sprintf("Invalid expiration duration received: %s", expirationStr)
-		renderErrorPage(w, errorMsg, http.StatusBadRequest)
-		return
-	}
-
-	password := r.FormValue("password")
-	var passwordHash string
-	if password != "" {
-		hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
-		if err != nil {
-			renderErrorPage(w, "Failed to hash password", http.StatusInternalServerError)
-			return
-		}
-		passwordHash = string(hash)
-	}
-
-	// Sanitize content and encrypt it
-	sanitizedContent := html.EscapeString(content)
-
-	// Convert config.AESKey to a pointer to use with cryptopasta
-	aesKeyPtr := (*[32]byte)(config.AESKey[:])
-
-	// Encrypt content using cryptopasta
-	encryptedContent, err := cryptopasta.Encrypt([]byte(sanitizedContent), aesKeyPtr)
-	if err != nil {
-		appLogger.Errorf("Encryption failed: %v", err)
-		renderErrorPage(w, "Failed to encrypt content", http.StatusInternalServerError)
-		return
-	}
-
-	pastie := Pastie{
-		ID:           generateID(),
-		Content:      base64.StdEncoding.EncodeToString(encryptedContent),
-		PasswordHash: passwordHash,
-		CreatedAt:    time.Now(),
-		ExpiresAt:    expiration,
-		ViewOnce:     viewOnce,
-		Viewed:       false,
-	}
-
-	// Save the pastie in the background
-	go func() {
-		if err := db.Create(&pastie).Error; err != nil {
-			appLogger.Errorf("Failed to save pastie: %v", err)
-		}
-	}()
-
-	// Prepare data for the share_link template
-	shareLink := fmt.Sprintf("http://%s/pastie/%s", r.Host, pastie.ID)
-	var timeoutRemaining string
-	if expiration.IsZero() {
-		timeoutRemaining = "Never"
-	} else {
-		timeoutRemaining = fmt.Sprintf("%v", expiration.Sub(time.Now()).Round(time.Second))
-	}
-
-	data := map[string]interface{}{
-		"Link":              shareLink,
-		"PasswordProtected": password != "",
-		"TimeoutRemaining":  timeoutRemaining,
-		"ViewOnce":          viewOnce,
-	}
-
-	// Load and execute share_link.html with the generated link
-	tmpl, err := template.ParseFiles("templates/share_link.html")
-	if err != nil {
-		appLogger.Errorf("Error loading share_link.html template: %v", err)
-		renderErrorPage(w, "Error loading share link page", http.StatusInternalServerError)
-		return
-	}
-
-	err = tmpl.Execute(w, data)
-	if err != nil {
-		appLogger.Errorf("Error rendering share_link.html template: %v", err)
-		renderErrorPage(w, "Error rendering share link page", http.StatusInternalServerError)
-		return
-	}
 }
 
 func getPaste(w http.ResponseWriter, r *http.Request) {
@@ -423,13 +253,6 @@ func getPaste(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Enforce one-time view pastie behavior
-	if pastie.ViewOnce && pastie.Viewed {
-		renderErrorPage(w, "This pastie has already been viewed and is no longer available", http.StatusGone)
-		return
-	}
-
-	// Decode the encrypted content
 	cipherBytes, err := base64.StdEncoding.DecodeString(pastie.Content)
 	if err != nil {
 		appLogger.Errorf("Failed to decode content: %v", err)
@@ -437,11 +260,9 @@ func getPaste(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Copy the AES key into a new variable of type [32]byte
 	var aesKey [32]byte
 	copy(aesKey[:], config.AESKey[:])
 
-	// Decrypt the content using the AES key pointer
 	decryptedContent, err := cryptopasta.Decrypt(cipherBytes, &aesKey)
 	if err != nil {
 		renderErrorPage(w, "Failed to decrypt content", http.StatusInternalServerError)
@@ -449,22 +270,19 @@ func getPaste(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Update the viewed status for pasties
-	if pastie.ViewOnce {
-		// Delete the pastie immediately after it is viewed
-		if err := db.Delete(&pastie).Error; err != nil {
-			appLogger.Errorf("Failed to delete pastie after one-time view: %v", err)
-			renderErrorPage(w, "Failed to delete pastie after viewing", http.StatusInternalServerError)
-			return
-		}
-	} else if !pastie.Viewed {
-		// Update viewed status for non one-time-view pasties
+	if !pastie.Viewed || pastie.ViewOnce {
 		pastie.Viewed = true
-		if err := db.Save(&pastie).Error; err != nil {
-			appLogger.Errorf("Failed to update pastie as viewed: %v", err)
+		if pastie.ViewOnce {
+			if err := db.Delete(&pastie).Error; err != nil {
+				appLogger.Errorf("Failed to delete one-time pastie: %v", err)
+			}
+		} else {
+			if err := db.Save(&pastie).Error; err != nil {
+				appLogger.Errorf("Failed to update pastie as viewed: %v", err)
+			}
 		}
 	}
 
-	// Load and execute the view_pastie template
 	tmpl, err := template.ParseFiles("templates/view_pastie.html")
 	if err != nil {
 		renderErrorPage(w, "Error loading template", http.StatusInternalServerError)
@@ -473,20 +291,11 @@ func getPaste(w http.ResponseWriter, r *http.Request) {
 	tmpl.Execute(w, map[string]string{"Content": string(decryptedContent)})
 }
 
-func adminPasties(w http.ResponseWriter, r *http.Request) {
-	var pasties []Pastie
-	if err := db.Find(&pasties).Error; err != nil {
-		renderErrorPage(w, "Failed to retrieve pasties", http.StatusInternalServerError)
-		return
-	}
-
-	tmpl, err := template.ParseFiles("templates/admin.html")
-	if err != nil {
-		renderErrorPage(w, "Error loading admin template", http.StatusInternalServerError)
-		return
-	}
-
-	tmpl.Execute(w, pasties)
+func formatDuration(d time.Duration) string {
+	h := int64(d.Hours())
+	m := int64(d.Minutes()) % 60
+	s := int64(d.Seconds()) % 60
+	return fmt.Sprintf("%dh%dm%ds", h, m, s)
 }
 
 func deletePastieHandler(w http.ResponseWriter, r *http.Request) {
@@ -500,12 +309,32 @@ func deletePastieHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func deleteAllPastiesHandler(w http.ResponseWriter, r *http.Request) {
-	if err := db.Where("expires_at != ?", time.Time{}).Delete(&Pastie{}).Error; err != nil {
+	if err := db.Where("expires_at <= ? AND expires_at != ?", time.Now().UTC(), time.Time{}).Delete(&Pastie{}).Error; err != nil {
 		appLogger.Errorf("Failed to delete all pasties: %v", err)
 		renderErrorPage(w, "Failed to delete all pasties", http.StatusInternalServerError)
 		return
 	}
 	http.Redirect(w, r, "/admin/pasties", http.StatusSeeOther)
+}
+
+func adminPasties(w http.ResponseWriter, r *http.Request) {
+	var pasties []Pastie
+	if err := db.Find(&pasties).Error; err != nil {
+		renderErrorPage(w, "Failed to load pasties", http.StatusInternalServerError)
+		return
+	}
+
+	tmpl, err := template.ParseFiles("templates/admin.html")
+	if err != nil {
+		renderErrorPage(w, "Failed to load admin page", http.StatusInternalServerError)
+		return
+	}
+	err = tmpl.Execute(w, pasties)
+	if err != nil {
+		appLogger.Errorf("Failed to execute admin template: %v", err)
+		renderErrorPage(w, "Failed to render admin page", http.StatusInternalServerError)
+		return
+	}
 }
 
 func startExpiredPastiesCleanup(interval time.Duration) {
@@ -516,7 +345,7 @@ func startExpiredPastiesCleanup(interval time.Duration) {
 	go func() {
 		for range ticker.C {
 			appLogger.Info("Running cleanup for expired pasties...")
-			err := db.Where("expires_at <= ? AND expires_at != ?", time.Now(), time.Time{}).Delete(&Pastie{}).Error
+			err := db.Where("expires_at <= ? AND expires_at != ?", time.Now().UTC(), time.Time{}).Delete(&Pastie{}).Error
 			if err != nil {
 				appLogger.Errorf("Failed to clean up expired pasties: %v", err)
 			} else {
@@ -524,6 +353,22 @@ func startExpiredPastiesCleanup(interval time.Duration) {
 			}
 		}
 	}()
+}
+
+func regenerateAESKeyHandler(w http.ResponseWriter, r *http.Request) {
+	newAESKey := generateAESKey()
+	masterKey := os.Getenv("MASTER_KEY")
+	storeAESKey(newAESKey, masterKey)
+	copy(config.AESKey[:], newAESKey[:])
+	appLogger.Info("Successfully regenerated and updated the AES key.")
+
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte("AES key successfully regenerated."))
+}
+
+func healthCheck(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte("OK"))
 }
 
 func renderErrorPage(w http.ResponseWriter, message string, statusCode int) {
@@ -535,22 +380,104 @@ func renderErrorPage(w http.ResponseWriter, message string, statusCode int) {
 	}
 
 	w.WriteHeader(statusCode)
-	tmpl.Execute(w, map[string]string{"ErrorMessage": message})
+	err = tmpl.Execute(w, map[string]string{"ErrorMessage": message})
+	if err != nil {
+		appLogger.Errorf("Failed to execute error template: %v", err)
+		http.Error(w, "An unexpected error occurred", http.StatusInternalServerError)
+	}
 }
 
-func healthCheck(w http.ResponseWriter, r *http.Request) {
-	w.WriteHeader(http.StatusOK)
-	w.Write([]byte("OK"))
-}
+func createPaste(w http.ResponseWriter, r *http.Request) {
+	content := r.FormValue("content")
+	if content == "" {
+		renderErrorPage(w, "Content cannot be empty", http.StatusBadRequest)
+		return
+	}
 
-func regenerateAESKeyHandler(w http.ResponseWriter, r *http.Request) {
-	newAESKey := generateAESKey()
-	storeAESKey(newAESKey, os.Getenv("MASTER_KEY"))
-	config.AESKey = newAESKey
-	appLogger.Info("Successfully regenerated and updated the AES key.")
+	viewOnce := r.FormValue("view_once") == "true"
+	expirationString := r.FormValue("expiration")
 
-	w.WriteHeader(http.StatusOK)
-	w.Write([]byte("AES key successfully regenerated."))
+	// Set expiration time based on user selection
+	var expiration time.Time
+	switch expirationString {
+	case "5min":
+		expiration = time.Now().UTC().Add(5 * time.Minute)
+	case "30min":
+		expiration = time.Now().UTC().Add(30 * time.Minute)
+	case "1hour":
+		expiration = time.Now().UTC().Add(1 * time.Hour)
+	case "1day":
+		expiration = time.Now().UTC().Add(24 * time.Hour)
+	case "7days":
+		expiration = time.Now().UTC().Add(7 * 24 * time.Hour)
+	case "forever":
+		expiration = time.Time{}
+	default:
+		renderErrorPage(w, fmt.Sprintf("Invalid expiration duration: %s", expirationString), http.StatusBadRequest)
+		return
+	}
+
+	password := r.FormValue("password")
+	var passwordHash string
+	if password != "" {
+		hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+		if err != nil {
+			renderErrorPage(w, "Failed to hash password", http.StatusInternalServerError)
+			return
+		}
+		passwordHash = string(hash)
+	}
+
+	sanitizedContent := html.EscapeString(content)
+	var aesKey [32]byte
+	copy(aesKey[:], config.AESKey[:])
+	encryptedContent, err := cryptopasta.Encrypt([]byte(sanitizedContent), &aesKey)
+	if err != nil {
+		appLogger.Errorf("Encryption failed: %v", err)
+		renderErrorPage(w, "Failed to encrypt content", http.StatusInternalServerError)
+		return
+	}
+
+	pastie := Pastie{
+		ID:           generateID(),
+		Content:      base64.StdEncoding.EncodeToString(encryptedContent),
+		PasswordHash: passwordHash,
+		CreatedAt:    time.Now().UTC(),
+		ExpiresAt:    expiration,
+		ViewOnce:     viewOnce,
+		Viewed:       false,
+	}
+
+	// Save the pastie in the background
+	go func() {
+		if err := db.Create(&pastie).Error; err != nil {
+			appLogger.Errorf("Failed to save pastie: %v", err)
+		}
+	}()
+
+	shareLink := fmt.Sprintf("http://%s/pastie/%s", r.Host, pastie.ID)
+	timeoutRemaining := formatDuration(expiration.Sub(time.Now().UTC()))
+
+	data := map[string]interface{}{
+		"Link":              shareLink,
+		"PasswordProtected": password != "",
+		"TimeoutRemaining":  timeoutRemaining,
+		"ViewOnce":          viewOnce,
+	}
+
+	tmpl, err := template.ParseFiles("templates/share_link.html")
+	if err != nil {
+		appLogger.Errorf("Error loading share_link.html template: %v", err)
+		renderErrorPage(w, "Error loading share link page", http.StatusInternalServerError)
+		return
+	}
+
+	err = tmpl.Execute(w, data)
+	if err != nil {
+		appLogger.Errorf("Error rendering share_link.html template: %v", err)
+		renderErrorPage(w, "Error rendering share link page", http.StatusInternalServerError)
+		return
+	}
 }
 
 func generateID() string {
@@ -560,4 +487,12 @@ func generateID() string {
 		return ""
 	}
 	return base64.URLEncoding.EncodeToString(b)
+}
+
+func generateAESKey() [32]byte {
+	var key [32]byte
+	if _, err := rand.Read(key[:]); err != nil {
+		appLogger.Fatalf("Failed to generate AES key: %v", err)
+	}
+	return key
 }
