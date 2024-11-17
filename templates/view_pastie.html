@@ -6,7 +6,6 @@
     <title>View Pastie</title>
     <link rel="stylesheet" href="/static/css/bootstrap.min.css">
     <link href="https://fonts.googleapis.com/css2?family=Sour+Gummy&display=swap" rel="stylesheet">
-    <script src="/static/js/dompurify.min.js"></script> <!-- Add DOMPurify -->
     <style>
         body {
             font-family: 'Sour Gummy', sans-serif;
@@ -32,35 +31,17 @@
             text-align: left;
             overflow-x: auto;
         }
-        .hidden-content {
-            display: none;
-        }
     </style>
 </head>
 <body>
     <div class="container">
         <img src="/static/images/logo_tp-min.png" alt="Pastie Pie Logo" class="img-fluid mb-4">
         <h1 class="mb-4">View Pastie</h1>
-        <div id="rawContent" class="hidden-content">{{.Content}}</div> <!-- Hidden div with content -->
-        <pre id="pastieContent"></pre> <!-- Visible sanitized content will go here -->
-
+        <pre>{{.Content}}</pre>
         {{if .TimeRemaining}}
         <p class="mt-3"><strong>Time Remaining:</strong> {{.TimeRemaining}}</p>
         {{end}}
     </div>
     <script src="/static/js/bootstrap.bundle.min.js"></script>
-    <script>
-        document.addEventListener('DOMContentLoaded', function () {
-            // Get the raw content from the hidden div
-            const rawContentElement = document.getElementById('rawContent');
-            const rawContent = rawContentElement.innerHTML;
-
-            // Sanitize the raw content using DOMPurify
-            const cleanContent = DOMPurify.sanitize(rawContent);
-
-            // Display the sanitized content in the <pre> element
-            document.getElementById('pastieContent').innerText = cleanContent;
-        });
-    </script>
 </body>
 </html>
