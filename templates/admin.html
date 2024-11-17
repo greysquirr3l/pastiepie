@@ -1,5 +1,6 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -9,23 +10,32 @@
         body {
             font-family: 'Sour Gummy', sans-serif;
         }
+
         .container {
             margin-top: 40px;
         }
+
         .actions {
             margin-top: 20px;
             display: flex;
             justify-content: space-between;
+            align-items: center;
+        }
+
+        .btn-action {
+            margin-right: 10px;
         }
     </style>
     <title>Admin - View All Pasties</title>
 </head>
+
 <body>
     <div class="container">
         <h1>Admin Panel - All Pasties</h1>
         <div class="actions">
-            <button id="regenerate-key-btn" class="btn btn-danger">Regenerate AES Key</button>
-            <p id="key-status" class="text-success"></p>
+            <button id="regenerate-key-btn" class="btn btn-danger btn-action">Regenerate AES Key</button>
+            <button id="delete-all-btn" class="btn btn-warning btn-action">Delete All Expired Pasties</button>
+            <p id="action-status" class="text-success"></p>
         </div>
         <table class="table table-striped">
             <thead>
@@ -35,6 +45,7 @@
                     <th>Expires At</th>
                     <th>View Once</th>
                     <th>Viewed</th>
+                    <th>Actions</th>
                 </tr>
             </thead>
             <tbody>
@@ -49,12 +60,17 @@
                             {{.ExpiresAt.Format "2006-01-02 15:04:05"}}
                         {{end}}
                     </td>
-                    <td>{{.ViewOnce}}</td>
-                    <td>{{.Viewed}}</td>
+                    <td>{{if .ViewOnce}}Yes{{else}}No{{end}}</td>
+                    <td>{{if .Viewed}}Yes{{else}}No{{end}}</td>
+                    <td>
+                        <form action="/admin/pasties/delete/{{.ID}}" method="POST" style="display:inline;">
+                            <button type="submit" class="btn btn-sm btn-danger">Delete</button>
+                        </form>
+                    </td>
                 </tr>
                 {{else}}
                 <tr>
-                    <td colspan="5" class="text-center">No pasties found</td>
+                    <td colspan="6" class="text-center">No pasties found</td>
                 </tr>
                 {{end}}
             </tbody>
@@ -75,15 +91,35 @@
                     }
                 })
                 .then(message => {
-                    document.getElementById("key-status").textContent = message;
-                    document.getElementById("key-status").className = "text-success mt-2";
+                    document.getElementById("action-status").textContent = message;
+                    document.getElementById("action-status").className = "text-success mt-2";
                 })
                 .catch(error => {
-                    document.getElementById("key-status").textContent = error.message;
-                    document.getElementById("key-status").className = "text-danger mt-2";
+                    document.getElementById("action-status").textContent = error.message;
+                    document.getElementById("action-status").className = "text-danger mt-2";
+                });
+            }
+        });
+
+        document.getElementById("delete-all-btn").addEventListener("click", function () {
+            if (confirm("Are you sure you want to delete all expired pasties?")) {
+                fetch("/admin/pasties/delete-all", {
+                    method: "POST",
+                })
+                .then(response => {
+                    if (response.ok) {
+                        window.location.reload();
+                    } else {
+                        throw new Error("Failed to delete expired pasties.");
+                    }
+                })
+                .catch(error => {
+                    document.getElementById("action-status").textContent = error.message;
+                    document.getElementById("action-status").className = "text-danger mt-2";
                 });
             }
         });
     </script>
 </body>
+
 </html>
