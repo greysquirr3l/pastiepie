@@ -1,10 +1,9 @@
 package main
 
 import (
-	"crypto/aes"
-	"crypto/cipher"
 	"crypto/rand"
 	"encoding/base64"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"html"
@@ -17,6 +16,7 @@ import (
 	"github.com/glebarez/sqlite"
 	"github.com/gorilla/handlers"
 	"github.com/gorilla/mux"
+	"github.com/gtank/cryptopasta"
 	"github.com/sirupsen/logrus"
 	"github.com/spf13/viper"
 	"gorm.io/gorm"
@@ -129,11 +129,15 @@ func initConfig(loadOnly bool) {
 		appLogger.Fatalf("Failed to query database for AES key: %v", result.Error)
 	} else {
 		appLogger.Info("AES key found in database. Decrypting...")
-		decryptedAESKey, err := DecryptAES(storedKey.EncryptedAESKey, masterKey)
+		encryptedAESKeyBytes, err := hex.DecodeString(storedKey.EncryptedAESKey)
+		if err != nil {
+			appLogger.Fatalf("Failed to decode stored AES key: %v", err)
+		}
+		decryptedAESKeyBytes, err := cryptopasta.Decrypt(encryptedAESKeyBytes, (*[32]byte)([]byte(masterKey)))
 		if err != nil {
 			appLogger.Fatalf("Failed to decrypt stored AES key: %v", err)
 		}
-		config.AESKey = decryptedAESKey
+		config.AESKey = base64.StdEncoding.EncodeToString(decryptedAESKeyBytes)
 		appLogger.Info("Loaded AES key from database.")
 	}
 
@@ -146,22 +150,27 @@ func initConfig(loadOnly bool) {
 
 func storeAESKey(aesKey string) {
 	masterKey := os.Getenv("MASTER_KEY")
-	encryptedAESKey, err := EncryptAES(aesKey, masterKey)
+	keyBytes, err := base64.StdEncoding.DecodeString(aesKey)
+	if err != nil {
+		appLogger.Fatalf("Failed to decode AES key: %v", err)
+	}
+	encryptedAESKey, err := cryptopasta.Encrypt(keyBytes, (*[32]byte)([]byte(masterKey)))
 	if err != nil {
 		appLogger.Fatalf("Failed to encrypt the AES key: %v", err)
 	}
+	encryptedAESKeyHex := hex.EncodeToString(encryptedAESKey)
 	var storedKey AppConfig
 	result := db.First(&storedKey, "key_id = ?", "aes_key")
 	if errors.Is(result.Error, gorm.ErrRecordNotFound) {
 		storedKey = AppConfig{
 			KeyID:           "aes_key",
-			EncryptedAESKey: encryptedAESKey,
+			EncryptedAESKey: encryptedAESKeyHex,
 		}
 		if err := db.Create(&storedKey).Error; err != nil {
 			appLogger.Fatalf("Failed to store AES key in database: %v", err)
 		}
 	} else {
-		storedKey.EncryptedAESKey = encryptedAESKey
+		storedKey.EncryptedAESKey = encryptedAESKeyHex
 		if err := db.Save(&storedKey).Error; err != nil {
 			appLogger.Fatalf("Failed to update AES key in database: %v", err)
 		}
@@ -274,71 +283,19 @@ func getPaste(w http.ResponseWriter, r *http.Request) {
 }
 
 func adminPasties(w http.ResponseWriter, r *http.Request) {
-	// Define a struct to include the AESKey along with Pastie details
-	type PastieWithKey struct {
-		ID        string
-		CreatedAt time.Time
-		ExpiresAt time.Time
-		ViewOnce  bool
-		Viewed    bool
-		AESKey    string
-	}
-
 	var pasties []Pastie
-	// Query all pasties from the database
 	if err := db.Find(&pasties).Error; err != nil {
 		http.Error(w, "Failed to retrieve pasties", http.StatusInternalServerError)
 		return
 	}
 
-	// Fetch MASTER_KEY for AES decryption
-	masterKey := os.Getenv("MASTER_KEY")
-	if len(masterKey) != 32 {
-		http.Error(w, "Invalid MASTER_KEY length; must be 32 bytes.", http.StatusInternalServerError)
-		return
-	}
-
-	// Create a slice to hold pasties with decrypted AES keys
-	var pastiesWithKeys []PastieWithKey
-
-	// Loop through each pastie and add the decrypted AES key
-	for _, pastie := range pasties {
-		var storedKey AppConfig
-		if err := db.First(&storedKey, "key_id = ?", "aes_key").Error; err != nil {
-			// Log the error and skip the pastie if AES key retrieval fails
-			appLogger.Errorf("Failed to retrieve AES key for pastie ID %s: %v", pastie.ID, err)
-			continue
-		}
-
-		// Decrypt the AES key
-		decryptedKey, err := DecryptAES(storedKey.EncryptedAESKey, masterKey)
-		if err != nil {
-			appLogger.Errorf("Failed to decrypt AES key for pastie ID %s: %v", pastie.ID, err)
-			continue
-		}
-
-		// Add the pastie with its decrypted AES key to the slice
-		pastiesWithKeys = append(pastiesWithKeys, PastieWithKey{
-			ID:        pastie.ID,
-			CreatedAt: pastie.CreatedAt,
-			ExpiresAt: pastie.ExpiresAt,
-			ViewOnce:  pastie.ViewOnce,
-			Viewed:    pastie.Viewed,
-			AESKey:    decryptedKey,
-		})
-	}
-
-	// Parse the admin.html template
 	tmpl, err := template.ParseFiles("templates/admin.html")
 	if err != nil {
 		http.Error(w, "Error loading admin template", http.StatusInternalServerError)
 		return
 	}
 
-	// Execute the template with the pastiesWithKeys data
-	if err := tmpl.Execute(w, pastiesWithKeys); err != nil {
-		http.Error(w, "Error rendering admin page", http.StatusInternalServerError)
-	}
+	tmpl.Execute(w, pasties)
 }
 
 func healthCheck(w http.ResponseWriter, r *http.Request) {
@@ -372,98 +329,37 @@ func generateID() string {
 }
 
 func encrypt(plainText, key string) (string, error) {
-	block, err := aes.NewCipher([]byte(key))
+	keyBytes, err := base64.StdEncoding.DecodeString(key)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("invalid key: %w", err)
 	}
-	cipherText := make([]byte, aes.BlockSize+len(plainText))
-	iv := cipherText[:aes.BlockSize]
-	if _, err := rand.Read(iv); err != nil {
-		return "", err
+	encrypted, err := cryptopasta.Encrypt([]byte(plainText), (*[32]byte)(keyBytes))
+	if err != nil {
+		return "", fmt.Errorf("encryption failed: %w", err)
 	}
-	stream := cipher.NewCFBEncrypter(block, iv)
-	stream.XORKeyStream(cipherText[aes.BlockSize:], []byte(plainText))
-	return base64.StdEncoding.EncodeToString(cipherText), nil
+	return base64.StdEncoding.EncodeToString(encrypted), nil
 }
 
 func decrypt(cipherText, key string) (string, error) {
-	if len(key) != 32 {
-		return "", errors.New("invalid key size; must be 32 bytes for AES-256 decryption")
+	keyBytes, err := base64.StdEncoding.DecodeString(key)
+	if err != nil {
+		return "", fmt.Errorf("invalid key: %w", err)
 	}
-
 	cipherBytes, err := base64.StdEncoding.DecodeString(cipherText)
 	if err != nil {
 		return "", fmt.Errorf("failed to decode cipherText: %w", err)
 	}
-
-	if len(cipherBytes) < aes.BlockSize {
-		return "", errors.New("ciphertext too short; missing initialization vector (IV)")
-	}
-
-	iv := cipherBytes[:aes.BlockSize]
-	cipherBytes = cipherBytes[aes.BlockSize:]
-
-	block, err := aes.NewCipher([]byte(key))
+	decrypted, err := cryptopasta.Decrypt(cipherBytes, (*[32]byte)(keyBytes))
 	if err != nil {
-		return "", fmt.Errorf("failed to create AES cipher block: %w", err)
+		return "", fmt.Errorf("decryption failed: %w", err)
 	}
-
-	stream := cipher.NewCFBDecrypter(block, iv)
-	stream.XORKeyStream(cipherBytes, cipherBytes)
-
-	return string(cipherBytes), nil
+	return string(decrypted), nil
 }
 
 func GenerateRandomAESKey() string {
-	for {
-		key := make([]byte, 32)
-		if _, err := rand.Read(key); err != nil {
-			appLogger.Warnf("Failed to generate AES key: %v. Retrying...", err)
-			continue
-		}
-		appLogger.Info("Successfully generated a 32-byte AES key.")
-		return base64.StdEncoding.EncodeToString(key)
-	}
-}
-
-func EncryptAES(plaintext, masterKey string) (string, error) {
-	block, err := aes.NewCipher([]byte(masterKey))
-	if err != nil {
-		return "", err
-	}
-
-	ciphertext := make([]byte, aes.BlockSize+len(plaintext))
-	iv := ciphertext[:aes.BlockSize]
-	if _, err := rand.Read(iv); err != nil {
-		return "", err
-	}
-
-	stream := cipher.NewCFBEncrypter(block, iv)
-	stream.XORKeyStream(ciphertext[aes.BlockSize:], []byte(plaintext))
-	return base64.StdEncoding.EncodeToString(ciphertext), nil
-}
-
-func DecryptAES(ciphertext, masterKey string) (string, error) {
-	block, err := aes.NewCipher([]byte(masterKey))
-	if err != nil {
-		return "", err
-	}
-
-	ciphertextBytes, err := base64.StdEncoding.DecodeString(ciphertext)
-	if err != nil {
-		return "", err
-	}
-
-	if len(ciphertextBytes) < aes.BlockSize {
-		return "", errors.New("ciphertext too short")
-	}
-
-	iv := ciphertextBytes[:aes.BlockSize]
-	ciphertextBytes = ciphertextBytes[aes.BlockSize:]
-
-	stream := cipher.NewCFBDecrypter(block, iv)
-	stream.XORKeyStream(ciphertextBytes, ciphertextBytes)
-	return string(ciphertextBytes), nil
+	key := cryptopasta.NewEncryptionKey()
+	appLogger.Debugf("Generated AES key: %s", base64.StdEncoding.EncodeToString(key[:]))
+	return base64.StdEncoding.EncodeToString(key[:])
 }
 
 func startExpiredPastiesCleanup(interval time.Duration) {
