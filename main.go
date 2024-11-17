@@ -110,25 +110,29 @@ func initConfig(loadOnly bool) {
 		return
 	}
 
-	// Validate MASTER_KEY
+	// Validate MASTER_KEY from environment variables
 	masterKey := os.Getenv("MASTER_KEY")
 	if len(masterKey) != 32 {
 		log.Fatalf("MASTER_KEY must be 32 bytes for AES-256 encryption. Current length: %d", len(masterKey))
 	}
 
-	// Verify and manage AES key in the database
+	// Check the database for an existing AES key
 	log.Println("Verifying AES key in database...")
 	var storedKey AppConfig
 	result := db.First(&storedKey, "key_id = ?", "aes_key")
 	if errors.Is(result.Error, gorm.ErrRecordNotFound) {
 		log.Println("No AES key found, generating a new one...")
 
+		// Generate a new AES key
 		newAESKey := GenerateRandomAESKey()
+
+		// Encrypt the AES key using the master key
 		encryptedAESKey, err := EncryptAES(newAESKey, masterKey)
 		if err != nil {
 			log.Fatalf("Failed to encrypt AES key: %v", err)
 		}
 
+		// Store the encrypted AES key in the database
 		storedKey = AppConfig{
 			KeyID:           "aes_key",
 			EncryptedAESKey: encryptedAESKey,
@@ -144,10 +148,13 @@ func initConfig(loadOnly bool) {
 		log.Fatalf("Failed to query database for AES key: %v", result.Error)
 	} else {
 		log.Println("AES key found in database. Decrypting...")
+
+		// Decrypt the AES key
 		decryptedAESKey, err := DecryptAES(storedKey.EncryptedAESKey, masterKey)
 		if err != nil {
 			log.Fatalf("Failed to decrypt stored AES key: %v", err)
 		}
+
 		config.AESKey = decryptedAESKey
 		log.Println("Loaded AES key from database.")
 	}
@@ -221,6 +228,7 @@ func setupRouter() *mux.Router {
 	r.HandleFunc("/pastie/{id}", getPaste).Methods("GET", "POST")
 	r.HandleFunc("/admin/pasties", adminPasties).Methods("GET")
 	r.HandleFunc("/healthz", healthCheck).Methods("GET")
+	r.HandleFunc("/admin/regenerate-aes-key", regenerateAESKeyHandler).Methods("POST")
 
 	// Serve static files from the /static/ directory
 	r.PathPrefix("/static/").Handler(http.StripPrefix("/static/", http.FileServer(http.Dir("./static/"))))
@@ -442,11 +450,15 @@ func decrypt(cipherText, key string) (string, error) {
 }
 
 func GenerateRandomAESKey() string {
-	key := make([]byte, 32)
-	if _, err := rand.Read(key); err != nil {
-		log.Fatalf("Failed to generate AES key: %v", err)
+	for {
+		key := make([]byte, 32) // 32 bytes for AES-256
+		if _, err := rand.Read(key); err != nil {
+			log.Printf("Failed to generate AES key: %v. Retrying...", err)
+			continue // Retry key generation
+		}
+		log.Println("Successfully generated a 32-byte AES key.")
+		return base64.StdEncoding.EncodeToString(key) // Return Base64 encoded string
 	}
-	return base64.StdEncoding.EncodeToString(key)
 }
 
 func EncryptAES(plaintext, masterKey string) (string, error) {
@@ -487,4 +499,51 @@ func DecryptAES(ciphertext, masterKey string) (string, error) {
 	stream := cipher.NewCFBDecrypter(block, iv)
 	stream.XORKeyStream(ciphertextBytes, ciphertextBytes)
 	return string(ciphertextBytes), nil
+}
+
+func regenerateAESKeyHandler(w http.ResponseWriter, r *http.Request) {
+	// Validate MASTER_KEY
+	masterKey := os.Getenv("MASTER_KEY")
+	if len(masterKey) != 32 {
+		http.Error(w, "MASTER_KEY must be 32 bytes for AES-256 encryption.", http.StatusInternalServerError)
+		return
+	}
+
+	// Generate a new AES key
+	newAESKey := GenerateRandomAESKey()
+
+	// Encrypt the new AES key with MASTER_KEY
+	encryptedAESKey, err := EncryptAES(newAESKey, masterKey)
+	if err != nil {
+		http.Error(w, "Failed to encrypt the new AES key.", http.StatusInternalServerError)
+		return
+	}
+
+	// Update the AES key in the database
+	var storedKey AppConfig
+	if err := db.First(&storedKey, "key_id = ?", "aes_key").Error; err != nil {
+		// If the AES key does not exist, create a new record
+		storedKey = AppConfig{
+			KeyID:           "aes_key",
+			EncryptedAESKey: encryptedAESKey,
+		}
+		if err := db.Create(&storedKey).Error; err != nil {
+			http.Error(w, "Failed to store the new AES key in the database.", http.StatusInternalServerError)
+			return
+		}
+	} else {
+		// Update the existing record
+		storedKey.EncryptedAESKey = encryptedAESKey
+		if err := db.Save(&storedKey).Error; err != nil {
+			http.Error(w, "Failed to update the AES key in the database.", http.StatusInternalServerError)
+			return
+		}
+	}
+
+	// Update the in-memory config
+	config.AESKey = newAESKey
+	log.Println("Successfully regenerated and updated the AES key.")
+
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte("AES key successfully regenerated."))
 }

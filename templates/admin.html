@@ -12,29 +12,10 @@
         .container {
             margin-top: 40px;
         }
-        .key-container {
-            position: relative;
-        }
-        .aes-key {
-            display: none;
-            background-color: #f8f9fa;
-            border: 1px solid #ced4da;
-            padding: 5px;
-            border-radius: 5px;
-            font-family: monospace;
-            position: absolute;
-            z-index: 10;
-            top: 30px;
-            left: 0;
-            box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
-        }
-        .view-key {
-            cursor: pointer;
-            color: #007bff;
-            text-decoration: underline;
-        }
-        .view-key:hover {
-            color: #0056b3;
+        .actions {
+            margin-top: 20px;
+            display: flex;
+            justify-content: space-between;
         }
     </style>
     <title>Admin - View All Pasties</title>
@@ -42,6 +23,10 @@
 <body>
     <div class="container">
         <h1>Admin Panel - All Pasties</h1>
+        <div class="actions">
+            <button id="regenerate-key-btn" class="btn btn-danger">Regenerate AES Key</button>
+            <p id="key-status" class="text-success"></p>
+        </div>
         <table class="table table-striped">
             <thead>
                 <tr>
@@ -50,7 +35,6 @@
                     <th>Expires At</th>
                     <th>View Once</th>
                     <th>Viewed</th>
-                    <th>AES Key</th>
                 </tr>
             </thead>
             <tbody>
@@ -67,32 +51,39 @@
                     </td>
                     <td>{{.ViewOnce}}</td>
                     <td>{{.Viewed}}</td>
-                    <td>
-                        <div class="key-container">
-                            <span class="view-key" onclick="toggleKey(this)">Click to View</span>
-                            <div class="aes-key">{{.AESKey}}</div>
-                        </div>
-                    </td>
                 </tr>
                 {{else}}
                 <tr>
-                    <td colspan="6" class="text-center">No pasties found</td>
+                    <td colspan="5" class="text-center">No pasties found</td>
                 </tr>
                 {{end}}
             </tbody>
         </table>
     </div>
-    <script src="/static/js/bootstrap.bundle.min.js"></script>
+    <script src="/static/js/bootstrap.min.js"></script>
     <script>
-        // Toggles the visibility of the AES key
-        function toggleKey(element) {
-            const keyDiv = element.nextElementSibling;
-            if (keyDiv.style.display === "none" || keyDiv.style.display === "") {
-                keyDiv.style.display = "block";
-            } else {
-                keyDiv.style.display = "none";
+        document.getElementById("regenerate-key-btn").addEventListener("click", function () {
+            if (confirm("Are you sure you want to regenerate the AES key? This action cannot be undone.")) {
+                fetch("/admin/regenerate-aes-key", {
+                    method: "POST",
+                })
+                .then(response => {
+                    if (response.ok) {
+                        return response.text();
+                    } else {
+                        throw new Error("Failed to regenerate AES key.");
+                    }
+                })
+                .then(message => {
+                    document.getElementById("key-status").textContent = message;
+                    document.getElementById("key-status").className = "text-success mt-2";
+                })
+                .catch(error => {
+                    document.getElementById("key-status").textContent = error.message;
+                    document.getElementById("key-status").className = "text-danger mt-2";
+                });
             }
-        }
+        });
     </script>
 </body>
 </html>
