@@ -1,6 +1,8 @@
 package main
 
 import (
+	"crypto/aes"
+	"crypto/cipher"
 	"crypto/rand"
 	"encoding/base64"
 	"errors"
@@ -143,6 +145,48 @@ func initConfig(loadOnly bool) {
 	}
 }
 
+// Encrypt function encrypts plaintext with AES key
+func encrypt(plainText []byte, key [32]byte) ([]byte, error) {
+	block, err := aes.NewCipher(key[:])
+	if err != nil {
+		return nil, fmt.Errorf("failed to create AES cipher block: %w", err)
+	}
+
+	cipherText := make([]byte, aes.BlockSize+len(plainText))
+	iv := cipherText[:aes.BlockSize]
+
+	// Generate random initialization vector
+	if _, err := rand.Read(iv); err != nil {
+		return nil, fmt.Errorf("failed to generate IV: %w", err)
+	}
+
+	stream := cipher.NewCFBEncrypter(block, iv)
+	stream.XORKeyStream(cipherText[aes.BlockSize:], plainText)
+
+	// Return the ciphertext encoded in base64
+	return cipherText, nil
+}
+
+// Decrypt function decrypts the ciphertext with AES key
+func decrypt(cipherText []byte, key [32]byte) ([]byte, error) {
+	if len(cipherText) < aes.BlockSize {
+		return nil, errors.New("ciphertext too short; missing initialization vector (IV)")
+	}
+
+	block, err := aes.NewCipher(key[:])
+	if err != nil {
+		return nil, fmt.Errorf("failed to create AES cipher block: %w", err)
+	}
+
+	iv := cipherText[:aes.BlockSize]
+	cipherText = cipherText[aes.BlockSize:]
+
+	stream := cipher.NewCFBDecrypter(block, iv)
+	stream.XORKeyStream(cipherText, cipherText)
+
+	return cipherText, nil
+}
+
 func storeAESKey(aesKey [32]byte, masterKey string) {
 	encryptedAESKey, err := cryptopasta.Encrypt(aesKey[:], (*[32]byte)([]byte(masterKey)))
 	if err != nil {
@@ -238,15 +282,28 @@ func createPaste(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	viewOnce := r.FormValue("view_once") == "true"
-	expirationString := r.FormValue("expiration")
+	// Handle expiration based on user input
+	expirationOption := r.FormValue("expiration")
 	var expiration time.Time
-	if expirationString == "forever" {
-		expiration = time.Time{}
-	} else {
-		expiration = time.Now().Add(7 * 24 * time.Hour) // Default to 7 days if not "forever"
+
+	switch expirationOption {
+	case "5min":
+		expiration = time.Now().Add(5 * time.Minute)
+	case "30min":
+		expiration = time.Now().Add(30 * time.Minute)
+	case "1hour":
+		expiration = time.Now().Add(1 * time.Hour)
+	case "1day":
+		expiration = time.Now().Add(24 * time.Hour)
+	case "7days":
+		expiration = time.Now().Add(7 * 24 * time.Hour)
+	case "forever":
+		expiration = time.Time{} // Forever, use zero time value
+	default:
+		expiration = time.Now().Add(7 * 24 * time.Hour) // Default to 7 days
 	}
 
+	// Password protection handling
 	password := r.FormValue("password")
 	var passwordHash string
 	if password != "" {
@@ -259,7 +316,7 @@ func createPaste(w http.ResponseWriter, r *http.Request) {
 	}
 
 	sanitizedContent := html.EscapeString(content)
-	encryptedContent, err := cryptopasta.Encrypt([]byte(sanitizedContent), &config.AESKey)
+	encryptedContent, err := encrypt([]byte(sanitizedContent), config.AESKey)
 	if err != nil {
 		appLogger.Errorf("Encryption failed: %v", err)
 		renderErrorPage(w, "Failed to encrypt content", http.StatusInternalServerError)
@@ -272,7 +329,7 @@ func createPaste(w http.ResponseWriter, r *http.Request) {
 		PasswordHash: passwordHash,
 		CreatedAt:    time.Now(),
 		ExpiresAt:    expiration,
-		ViewOnce:     viewOnce,
+		ViewOnce:     r.FormValue("view_once") == "true",
 		Viewed:       false,
 	}
 
@@ -285,13 +342,19 @@ func createPaste(w http.ResponseWriter, r *http.Request) {
 
 	// Prepare data for the share_link template
 	shareLink := fmt.Sprintf("http://%s/pastie/%s", r.Host, pastie.ID)
-	timeoutRemaining := expiration.Sub(time.Now()).String() // Calculate the time remaining
+
+	var timeoutRemaining string
+	if !expiration.IsZero() {
+		timeoutRemaining = formatDuration(expiration.Sub(time.Now()))
+	} else {
+		timeoutRemaining = "Never"
+	}
 
 	data := map[string]interface{}{
 		"Link":              shareLink,
 		"PasswordProtected": password != "",
 		"TimeoutRemaining":  timeoutRemaining,
-		"ViewOnce":          viewOnce,
+		"ViewOnce":          pastie.ViewOnce,
 	}
 
 	// Load and execute share_link.html with the generated link
@@ -307,6 +370,22 @@ func createPaste(w http.ResponseWriter, r *http.Request) {
 		appLogger.Errorf("Error rendering share_link.html template: %v", err)
 		renderErrorPage(w, "Error rendering share link page", http.StatusInternalServerError)
 		return
+	}
+}
+
+func formatDuration(d time.Duration) string {
+	days := d / (24 * time.Hour)
+	d -= days * 24 * time.Hour
+	hours := d / time.Hour
+	d -= hours * time.Hour
+	minutes := d / time.Minute
+
+	if days > 0 {
+		return fmt.Sprintf("%dd %dh %dm", days, hours, minutes)
+	} else if hours > 0 {
+		return fmt.Sprintf("%dh %dm", hours, minutes)
+	} else {
+		return fmt.Sprintf("%dm", minutes)
 	}
 }
 
