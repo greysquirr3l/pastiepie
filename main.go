@@ -395,41 +395,34 @@ func createPaste(w http.ResponseWriter, r *http.Request) {
 func getPaste(w http.ResponseWriter, r *http.Request) {
 	id := mux.Vars(r)["id"]
 
-	// Retrieve the pastie from the database
 	var pastie Pastie
 	if err := db.First(&pastie, "id = ?", id).Error; err != nil {
 		renderErrorPage(w, "Pastie not found", http.StatusNotFound)
 		return
 	}
 
-	// Handle one-time view pasties
-	if pastie.ViewOnce && pastie.Viewed {
-		renderErrorPage(w, "This pastie has already been viewed", http.StatusGone)
+	// Handle password-protected pastie
+	if pastie.PasswordHash != "" && r.Method != http.MethodPost {
+		// Render password prompt page if the pastie is password protected and request method is not POST
+		tmpl, err := template.ParseFiles("templates/password_prompt.html")
+		if err != nil {
+			appLogger.Errorf("Failed to load password prompt template: %v", err)
+			renderErrorPage(w, "Failed to load password prompt page", http.StatusInternalServerError)
+			return
+		}
+		tmpl.Execute(w, map[string]string{"PastieID": id})
 		return
 	}
 
-	// If the pastie is password protected
+	// Validate the password if the pastie is password-protected
 	if pastie.PasswordHash != "" {
-		if r.Method == http.MethodPost {
-			// Handle password verification if the request method is POST
-			password := r.FormValue("password")
-			if err := bcrypt.CompareHashAndPassword([]byte(pastie.PasswordHash), []byte(password)); err != nil {
-				renderErrorPage(w, "Incorrect password", http.StatusUnauthorized)
-				return
-			}
-		} else {
-			// Render the password prompt page if the request method is GET
-			tmpl, err := template.ParseFiles("templates/password_prompt.html")
-			if err != nil {
-				renderErrorPage(w, "Error loading password prompt page", http.StatusInternalServerError)
-				return
-			}
-			tmpl.Execute(w, map[string]string{"PastieID": pastie.ID})
+		password := r.FormValue("password")
+		if err := bcrypt.CompareHashAndPassword([]byte(pastie.PasswordHash), []byte(password)); err != nil {
+			renderErrorPage(w, "Incorrect password", http.StatusUnauthorized)
 			return
 		}
 	}
 
-	// Decrypt the content
 	cipherBytes, err := base64.StdEncoding.DecodeString(pastie.Content)
 	if err != nil {
 		appLogger.Errorf("Failed to decode content: %v", err)
@@ -437,16 +430,17 @@ func getPaste(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Create a [32]byte slice and copy AES key into it
-	var aesKeyCopy [32]byte
-	copy(aesKeyCopy[:], config.AESKey[:])
-	decryptedContent, err := cryptopasta.Decrypt(cipherBytes, &aesKeyCopy)
+	// Convert AESKey to *[32]byte
+	aesKeyPtr := (*[32]byte)(&config.AESKey)
+
+	// Decrypt the content using the AES key
+	decryptedContent, err := cryptopasta.Decrypt(cipherBytes, aesKeyPtr)
 	if err != nil {
-		renderErrorPage(w, fmt.Sprintf("Failed to decrypt content: %v", err), http.StatusInternalServerError)
+		renderErrorPage(w, "Failed to decrypt content", http.StatusInternalServerError)
 		return
 	}
 
-	// Update the pastie as viewed if it's a one-time view
+	// Update the viewed status for one-time view pasties
 	if pastie.ViewOnce {
 		pastie.Viewed = true
 		if err := db.Save(&pastie).Error; err != nil {
@@ -454,7 +448,7 @@ func getPaste(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Load and execute the view_pastie.html template to display the content
+	// Load and execute the view_pastie template
 	tmpl, err := template.ParseFiles("templates/view_pastie.html")
 	if err != nil {
 		renderErrorPage(w, "Error loading template", http.StatusInternalServerError)
