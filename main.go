@@ -17,6 +17,7 @@ import (
 	"github.com/glebarez/sqlite"
 	"github.com/gorilla/handlers"
 	"github.com/gorilla/mux"
+	"github.com/gtank/cryptopasta"
 	"github.com/sirupsen/logrus"
 	"github.com/spf13/viper"
 	"golang.org/x/crypto/bcrypt"
@@ -33,7 +34,7 @@ var (
 // Config struct to store global settings
 type Config struct {
 	LogLevel string
-	AESKey   [32]byte
+	AESKey   *[32]byte
 	DBPath   string
 	Port     string
 }
@@ -139,21 +140,12 @@ func initConfig(loadOnly bool) {
 		if err != nil {
 			appLogger.Fatalf("Failed to decrypt stored AES key: %v", err)
 		}
-		copy(config.AESKey[:], decryptedAESKeyBytes)
+		config.AESKey = decryptedAESKeyBytes
 		appLogger.Info("Loaded AES key from database.")
 	}
 }
 
-func generateAESKey() [32]byte {
-	var key [32]byte
-	if _, err := rand.Read(key[:]); err != nil {
-		appLogger.Fatalf("Failed to generate AES key: %v", err)
-	}
-	appLogger.Debugf("Generated AES key: %x", key)
-	return key
-}
-
-func storeAESKey(aesKey [32]byte, masterKey string) {
+func storeAESKey(aesKey *[32]byte, masterKey string) {
 	encryptedAESKey, err := encryptAESRaw(aesKey[:], masterKey)
 	if err != nil {
 		appLogger.Fatalf("Failed to encrypt the AES key: %v", err)
@@ -209,6 +201,15 @@ func initDatabase() {
 	appLogger.Info("Database initialized successfully.")
 }
 
+func generateAESKey() *[32]byte {
+	key := [32]byte{}
+	if _, err := rand.Read(key[:]); err != nil {
+		appLogger.Fatalf("Failed to generate AES key: %v", err)
+	}
+	appLogger.Debugf("Generated AES key: %x", key)
+	return &key
+}
+
 func encryptAESRaw(plaintext []byte, masterKey string) ([]byte, error) {
 	block, err := aes.NewCipher([]byte(masterKey))
 	if err != nil {
@@ -226,7 +227,7 @@ func encryptAESRaw(plaintext []byte, masterKey string) ([]byte, error) {
 	return ciphertext, nil
 }
 
-func decryptAESRaw(ciphertext []byte, masterKey string) ([]byte, error) {
+func decryptAESRaw(ciphertext []byte, masterKey string) (*[32]byte, error) {
 	block, err := aes.NewCipher([]byte(masterKey))
 	if err != nil {
 		return nil, err
@@ -241,7 +242,14 @@ func decryptAESRaw(ciphertext []byte, masterKey string) ([]byte, error) {
 
 	stream := cipher.NewCFBDecrypter(block, iv)
 	stream.XORKeyStream(ciphertext, ciphertext)
-	return ciphertext, nil
+
+	if len(ciphertext) != 32 {
+		return nil, errors.New("invalid AES key length after decryption")
+	}
+
+	var key [32]byte
+	copy(key[:], ciphertext)
+	return &key, nil
 }
 
 func setupRouter() *mux.Router {
@@ -276,25 +284,16 @@ func createPaste(w http.ResponseWriter, r *http.Request) {
 
 	viewOnce := r.FormValue("view_once") == "true"
 	expirationString := r.FormValue("expiration")
-
 	var expiration time.Time
-	// Parse expiration string from the form
-	switch expirationString {
-	case "5min":
-		expiration = time.Now().Add(5 * time.Minute)
-	case "30min":
-		expiration = time.Now().Add(30 * time.Minute)
-	case "1hour":
-		expiration = time.Now().Add(1 * time.Hour)
-	case "1day":
-		expiration = time.Now().Add(24 * time.Hour)
-	case "7days":
-		expiration = time.Now().Add(7 * 24 * time.Hour)
-	case "forever":
-		expiration = time.Time{} // Forever means no expiration time
-	default:
-		renderErrorPage(w, "Invalid expiration duration", http.StatusBadRequest)
-		return
+	if expirationString == "forever" {
+		expiration = time.Time{}
+	} else {
+		duration, err := time.ParseDuration(expirationString)
+		if err != nil {
+			renderErrorPage(w, "Invalid expiration duration", http.StatusBadRequest)
+			return
+		}
+		expiration = time.Now().Add(duration)
 	}
 
 	password := r.FormValue("password")
@@ -309,7 +308,7 @@ func createPaste(w http.ResponseWriter, r *http.Request) {
 	}
 
 	sanitizedContent := html.EscapeString(content)
-	encryptedContent, err := encrypt([]byte(sanitizedContent), &config.AESKey)
+	encryptedContent, err := cryptopasta.Encrypt([]byte(sanitizedContent), config.AESKey)
 	if err != nil {
 		appLogger.Errorf("Encryption failed: %v", err)
 		renderErrorPage(w, "Failed to encrypt content", http.StatusInternalServerError)
@@ -335,7 +334,7 @@ func createPaste(w http.ResponseWriter, r *http.Request) {
 
 	// Prepare data for the share_link template
 	shareLink := fmt.Sprintf("http://%s/pastie/%s", r.Host, pastie.ID)
-	timeoutRemaining := formatDuration(expiration.Sub(time.Now())) // Calculate the time remaining
+	timeoutRemaining := expiration.Sub(time.Now()).String() // Calculate the time remaining
 
 	data := map[string]interface{}{
 		"Link":              shareLink,
@@ -393,7 +392,7 @@ func getPaste(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	decryptedContent, err := decrypt(cipherBytes, &config.AESKey)
+	decryptedContent, err := cryptopasta.Decrypt(cipherBytes, config.AESKey)
 	if err != nil {
 		renderErrorPage(w, "Failed to decrypt content", http.StatusInternalServerError)
 		return
@@ -441,9 +440,9 @@ func deletePastieHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func deleteAllPastiesHandler(w http.ResponseWriter, r *http.Request) {
-	if err := db.Where("expires_at <= ? AND expires_at != ?", time.Now(), time.Time{}).Delete(&Pastie{}).Error; err != nil {
-		appLogger.Errorf("Failed to delete expired pasties: %v", err)
-		renderErrorPage(w, "Failed to delete expired pasties", http.StatusInternalServerError)
+	if err := db.Where("expires_at != ?", time.Time{}).Delete(&Pastie{}).Error; err != nil {
+		appLogger.Errorf("Failed to delete all pasties: %v", err)
+		renderErrorPage(w, "Failed to delete all pasties", http.StatusInternalServerError)
 		return
 	}
 	http.Redirect(w, r, "/admin/pasties", http.StatusSeeOther)
@@ -486,8 +485,7 @@ func healthCheck(w http.ResponseWriter, r *http.Request) {
 
 func regenerateAESKeyHandler(w http.ResponseWriter, r *http.Request) {
 	newAESKey := generateAESKey()
-	masterKey := os.Getenv("MASTER_KEY")
-	storeAESKey(newAESKey, masterKey)
+	storeAESKey(newAESKey, os.Getenv("MASTER_KEY"))
 	config.AESKey = newAESKey
 	appLogger.Info("Successfully regenerated and updated the AES key.")
 
@@ -502,45 +500,4 @@ func generateID() string {
 		return ""
 	}
 	return base64.URLEncoding.EncodeToString(b)
-}
-
-func encrypt(plainText []byte, key *[32]byte) ([]byte, error) {
-	block, err := aes.NewCipher(key[:])
-	if err != nil {
-		return nil, err
-	}
-	cipherText := make([]byte, aes.BlockSize+len(plainText))
-	iv := cipherText[:aes.BlockSize]
-	if _, err := rand.Read(iv); err != nil {
-		return nil, err
-	}
-	stream := cipher.NewCFBEncrypter(block, iv)
-	stream.XORKeyStream(cipherText[aes.BlockSize:], plainText)
-	return cipherText, nil
-}
-
-func decrypt(cipherText []byte, key *[32]byte) ([]byte, error) {
-	if len(cipherText) < aes.BlockSize {
-		return nil, errors.New("ciphertext too short; missing initialization vector (IV)")
-	}
-
-	iv := cipherText[:aes.BlockSize]
-	cipherText = cipherText[aes.BlockSize:]
-
-	block, err := aes.NewCipher(key[:])
-	if err != nil {
-		return nil, fmt.Errorf("failed to create AES cipher block: %w", err)
-	}
-
-	stream := cipher.NewCFBDecrypter(block, iv)
-	stream.XORKeyStream(cipherText, cipherText)
-
-	return cipherText, nil
-}
-
-func formatDuration(d time.Duration) string {
-	if d <= 0 {
-		return "Never"
-	}
-	return d.Round(time.Minute).String()
 }
