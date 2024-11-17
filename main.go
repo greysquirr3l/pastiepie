@@ -255,7 +255,7 @@ func decryptAESRaw(ciphertext []byte, masterKey string) (*[32]byte, error) {
 func setupRouter() *mux.Router {
 	r := mux.NewRouter()
 	r.HandleFunc("/", serveCreateForm).Methods("GET")
-	r.HandleFunc("/pastie", createPaste).Methods("POST")
+	r.HandleFunc("/pastie", handlePastie).Methods("GET", "POST")
 	r.HandleFunc("/pastie/{id}", getPaste).Methods("GET", "POST")
 	r.HandleFunc("/admin/pasties", adminPasties).Methods("GET")
 	r.HandleFunc("/admin/pasties/delete/{id}", deletePastieHandler).Methods("POST")
@@ -264,6 +264,18 @@ func setupRouter() *mux.Router {
 	r.HandleFunc("/admin/regenerate-aes-key", regenerateAESKeyHandler).Methods("POST")
 	r.PathPrefix("/static/").Handler(http.StripPrefix("/static/", http.FileServer(http.Dir("./static/"))))
 	return r
+}
+
+func handlePastie(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodPost:
+		createPaste(w, r) // Proceed to handle POST request for creating a pastie
+	case http.MethodGet:
+		// Redirect the user to the home page to create a new pastie
+		http.Redirect(w, r, "/", http.StatusSeeOther)
+	default:
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	}
 }
 
 func serveCreateForm(w http.ResponseWriter, r *http.Request) {
@@ -383,29 +395,41 @@ func createPaste(w http.ResponseWriter, r *http.Request) {
 func getPaste(w http.ResponseWriter, r *http.Request) {
 	id := mux.Vars(r)["id"]
 
+	// Retrieve the pastie from the database
 	var pastie Pastie
 	if err := db.First(&pastie, "id = ?", id).Error; err != nil {
 		renderErrorPage(w, "Pastie not found", http.StatusNotFound)
 		return
 	}
 
+	// Handle one-time view pasties
 	if pastie.ViewOnce && pastie.Viewed {
 		renderErrorPage(w, "This pastie has already been viewed", http.StatusGone)
 		return
 	}
 
+	// If the pastie is password protected
 	if pastie.PasswordHash != "" {
-		password := r.FormValue("password")
-		if password == "" {
-			renderErrorPage(w, "This pastie is password protected. Please provide a password.", http.StatusUnauthorized)
-			return
-		}
-		if err := bcrypt.CompareHashAndPassword([]byte(pastie.PasswordHash), []byte(password)); err != nil {
-			renderErrorPage(w, "Incorrect password", http.StatusUnauthorized)
+		if r.Method == http.MethodPost {
+			// Handle password verification if the request method is POST
+			password := r.FormValue("password")
+			if err := bcrypt.CompareHashAndPassword([]byte(pastie.PasswordHash), []byte(password)); err != nil {
+				renderErrorPage(w, "Incorrect password", http.StatusUnauthorized)
+				return
+			}
+		} else {
+			// Render the password prompt page if the request method is GET
+			tmpl, err := template.ParseFiles("templates/password_prompt.html")
+			if err != nil {
+				renderErrorPage(w, "Error loading password prompt page", http.StatusInternalServerError)
+				return
+			}
+			tmpl.Execute(w, map[string]string{"PastieID": pastie.ID})
 			return
 		}
 	}
 
+	// Decrypt the content
 	cipherBytes, err := base64.StdEncoding.DecodeString(pastie.Content)
 	if err != nil {
 		appLogger.Errorf("Failed to decode content: %v", err)
@@ -413,12 +437,16 @@ func getPaste(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	decryptedContent, err := cryptopasta.Decrypt(cipherBytes, config.AESKey)
+	// Create a [32]byte slice and copy AES key into it
+	var aesKeyCopy [32]byte
+	copy(aesKeyCopy[:], config.AESKey[:])
+	decryptedContent, err := cryptopasta.Decrypt(cipherBytes, &aesKeyCopy)
 	if err != nil {
-		renderErrorPage(w, "Failed to decrypt content", http.StatusInternalServerError)
+		renderErrorPage(w, fmt.Sprintf("Failed to decrypt content: %v", err), http.StatusInternalServerError)
 		return
 	}
 
+	// Update the pastie as viewed if it's a one-time view
 	if pastie.ViewOnce {
 		pastie.Viewed = true
 		if err := db.Save(&pastie).Error; err != nil {
@@ -426,6 +454,7 @@ func getPaste(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Load and execute the view_pastie.html template to display the content
 	tmpl, err := template.ParseFiles("templates/view_pastie.html")
 	if err != nil {
 		renderErrorPage(w, "Error loading template", http.StatusInternalServerError)
