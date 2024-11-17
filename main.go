@@ -11,7 +11,6 @@ import (
 	"html/template"
 	"net/http"
 	"os"
-	"runtime/debug"
 	"sync"
 	"time"
 
@@ -33,7 +32,7 @@ var (
 // Config struct to store global settings
 type Config struct {
 	LogLevel string
-	AESKey   string
+	AESKey   []byte
 	DBPath   string
 	Port     string
 }
@@ -58,31 +57,20 @@ type Pastie struct {
 func main() {
 	defer func() {
 		if r := recover(); r != nil {
-			appLogger.Fatalf("Application panicked: %v\nStacktrace: %s", r, debug.Stack())
+			appLogger.Fatalf("Application panicked: %v", r)
 		}
 	}()
 
 	appLogger.Info("Starting application...")
 
 	initLogger()
-
-	// Load configuration for logging purposes
 	initConfig(true)
-
-	// Initialize database
 	initDatabase()
-
-	// Reload configuration including AES key setup
 	initConfig(false)
 
 	defer func() {
-		if db != nil {
-			sqlDB, err := db.DB()
-			if err == nil {
-				sqlDB.Close()
-				appLogger.Info("Database connection closed successfully.")
-			}
-		}
+		sqlDB, _ := db.DB()
+		sqlDB.Close()
 	}()
 
 	startExpiredPastiesCleanup(10 * time.Minute)
@@ -131,15 +119,12 @@ func initConfig(loadOnly bool) {
 		appLogger.Fatalf("MASTER_KEY must be 32 bytes for AES-256 encryption.")
 	}
 
-	if db == nil {
-		appLogger.Fatalf("Database not initialized before loading the AES key")
-	}
-
 	var storedKey AppConfig
 	result := db.First(&storedKey, "key_id = ?", "aes_key")
 	if errors.Is(result.Error, gorm.ErrRecordNotFound) {
 		appLogger.Info("No AES key found, generating a new one...")
-		config.AESKey = GenerateRandomAESKey()
+		aesKey := generateAESKey()
+		config.AESKey = aesKey
 		storeAESKey(config.AESKey)
 	} else if result.Error != nil {
 		appLogger.Fatalf("Failed to query database for AES key: %v", result.Error)
@@ -149,43 +134,38 @@ func initConfig(loadOnly bool) {
 		if err != nil {
 			appLogger.Fatalf("Failed to decode stored AES key: %v", err)
 		}
-		decryptedAESKeyBytes, err := DecryptAESRaw(encryptedAESKeyBytes, masterKey)
+		decryptedAESKeyBytes, err := decryptAESRaw(encryptedAESKeyBytes, masterKey)
 		if err != nil {
 			appLogger.Fatalf("Failed to decrypt stored AES key: %v", err)
 		}
-		config.AESKey = base64.StdEncoding.EncodeToString(decryptedAESKeyBytes)
+		if len(decryptedAESKeyBytes) != 32 {
+			appLogger.Fatalf("Decrypted AES key is not 32 bytes. Found length: %d", len(decryptedAESKeyBytes))
+		}
+		config.AESKey = decryptedAESKeyBytes
 		appLogger.Info("Loaded AES key from database.")
-	}
-
-	if !validateAESKey(config.AESKey) {
-		appLogger.Warn("Invalid AES key detected. Regenerating...")
-		config.AESKey = GenerateRandomAESKey()
-		storeAESKey(config.AESKey)
 	}
 }
 
-func storeAESKey(aesKey string) {
+func storeAESKey(aesKey []byte) {
 	masterKey := os.Getenv("MASTER_KEY")
-	aesKeyBytes, err := base64.StdEncoding.DecodeString(aesKey)
-	if err != nil {
-		appLogger.Fatalf("Failed to decode AES key: %v", err)
-	}
-	encryptedAESKey, err := EncryptAESRaw(aesKeyBytes, masterKey)
+	encryptedAESKey, err := encryptAESRaw(aesKey, masterKey)
 	if err != nil {
 		appLogger.Fatalf("Failed to encrypt the AES key: %v", err)
 	}
+	encryptedAESKeyString := base64.StdEncoding.EncodeToString(encryptedAESKey)
+
 	var storedKey AppConfig
 	result := db.First(&storedKey, "key_id = ?", "aes_key")
 	if errors.Is(result.Error, gorm.ErrRecordNotFound) {
 		storedKey = AppConfig{
 			KeyID:           "aes_key",
-			EncryptedAESKey: base64.StdEncoding.EncodeToString(encryptedAESKey),
+			EncryptedAESKey: encryptedAESKeyString,
 		}
 		if err := db.Create(&storedKey).Error; err != nil {
 			appLogger.Fatalf("Failed to store AES key in database: %v", err)
 		}
 	} else {
-		storedKey.EncryptedAESKey = base64.StdEncoding.EncodeToString(encryptedAESKey)
+		storedKey.EncryptedAESKey = encryptedAESKeyString
 		if err := db.Save(&storedKey).Error; err != nil {
 			appLogger.Fatalf("Failed to update AES key in database: %v", err)
 		}
@@ -193,48 +173,7 @@ func storeAESKey(aesKey string) {
 	appLogger.Info("AES key successfully stored in the database.")
 }
 
-func EncryptAESRaw(plaintext []byte, masterKey string) ([]byte, error) {
-	block, err := aes.NewCipher([]byte(masterKey))
-	if err != nil {
-		return nil, err
-	}
-
-	ciphertext := make([]byte, aes.BlockSize+len(plaintext))
-	iv := ciphertext[:aes.BlockSize]
-	if _, err := rand.Read(iv); err != nil {
-		return nil, err
-	}
-
-	stream := cipher.NewCFBEncrypter(block, iv)
-	stream.XORKeyStream(ciphertext[aes.BlockSize:], plaintext)
-	return ciphertext, nil
-}
-
-func DecryptAESRaw(ciphertext []byte, masterKey string) ([]byte, error) {
-	block, err := aes.NewCipher([]byte(masterKey))
-	if err != nil {
-		return nil, err
-	}
-
-	if len(ciphertext) < aes.BlockSize {
-		return nil, errors.New("ciphertext too short")
-	}
-
-	iv := ciphertext[:aes.BlockSize]
-	ciphertext = ciphertext[aes.BlockSize:]
-
-	stream := cipher.NewCFBDecrypter(block, iv)
-	stream.XORKeyStream(ciphertext, ciphertext)
-	return ciphertext, nil
-}
-
 func initDatabase() {
-	defer func() {
-		if r := recover(); r != nil {
-			appLogger.Fatalf("Database initialization panicked: %v\nStacktrace: %s", r, debug.Stack())
-		}
-	}()
-
 	appLogger.Info("Initializing database...")
 
 	if config.DBPath == "" {
@@ -264,6 +203,50 @@ func initDatabase() {
 	appLogger.Info("Database initialized successfully.")
 }
 
+func generateAESKey() []byte {
+	key := make([]byte, 32)
+	if _, err := rand.Read(key); err != nil {
+		appLogger.Fatalf("Failed to generate AES key: %v", err)
+	}
+	appLogger.Debugf("Generated AES key: %x", key)
+	return key
+}
+
+func encryptAESRaw(plaintext []byte, masterKey string) ([]byte, error) {
+	block, err := aes.NewCipher([]byte(masterKey))
+	if err != nil {
+		return nil, err
+	}
+
+	ciphertext := make([]byte, aes.BlockSize+len(plaintext))
+	iv := ciphertext[:aes.BlockSize]
+	if _, err := rand.Read(iv); err != nil {
+		return nil, err
+	}
+
+	stream := cipher.NewCFBEncrypter(block, iv)
+	stream.XORKeyStream(ciphertext[aes.BlockSize:], plaintext)
+	return ciphertext, nil
+}
+
+func decryptAESRaw(ciphertext []byte, masterKey string) ([]byte, error) {
+	block, err := aes.NewCipher([]byte(masterKey))
+	if err != nil {
+		return nil, err
+	}
+
+	if len(ciphertext) < aes.BlockSize {
+		return nil, errors.New("ciphertext too short")
+	}
+
+	iv := ciphertext[:aes.BlockSize]
+	ciphertext = ciphertext[aes.BlockSize:]
+
+	stream := cipher.NewCFBDecrypter(block, iv)
+	stream.XORKeyStream(ciphertext, ciphertext)
+	return ciphertext, nil
+}
+
 func setupRouter() *mux.Router {
 	r := mux.NewRouter()
 	r.HandleFunc("/", serveCreateForm).Methods("GET")
@@ -279,7 +262,6 @@ func setupRouter() *mux.Router {
 func serveCreateForm(w http.ResponseWriter, r *http.Request) {
 	tmpl, err := template.ParseFiles("templates/form.html")
 	if err != nil {
-		appLogger.Errorf("Error loading form template: %v", err)
 		http.Error(w, "Error loading form template", http.StatusInternalServerError)
 		return
 	}
@@ -294,7 +276,7 @@ func createPaste(w http.ResponseWriter, r *http.Request) {
 	}
 
 	sanitizedContent := html.EscapeString(content)
-	encryptedContent, err := encrypt(sanitizedContent, config.AESKey)
+	encryptedContent, err := encrypt([]byte(sanitizedContent), config.AESKey)
 	if err != nil {
 		appLogger.Errorf("Encryption failed: %v", err)
 		http.Error(w, "Failed to encrypt content", http.StatusInternalServerError)
@@ -303,7 +285,7 @@ func createPaste(w http.ResponseWriter, r *http.Request) {
 
 	pastie := Pastie{
 		ID:        generateID(),
-		Content:   encryptedContent,
+		Content:   base64.StdEncoding.EncodeToString(encryptedContent),
 		CreatedAt: time.Now(),
 		ExpiresAt: time.Now().Add(24 * time.Hour),
 	}
@@ -326,7 +308,14 @@ func getPaste(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	decryptedContent, err := decrypt(pastie.Content, config.AESKey)
+	cipherBytes, err := base64.StdEncoding.DecodeString(pastie.Content)
+	if err != nil {
+		appLogger.Errorf("Failed to decode content: %v", err)
+		http.Error(w, "Failed to decode content", http.StatusInternalServerError)
+		return
+	}
+
+	decryptedContent, err := decrypt(cipherBytes, config.AESKey)
 	if err != nil {
 		http.Error(w, "Failed to decrypt content", http.StatusInternalServerError)
 		return
@@ -337,7 +326,7 @@ func getPaste(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Error loading template", http.StatusInternalServerError)
 		return
 	}
-	tmpl.Execute(w, map[string]string{"Content": decryptedContent})
+	tmpl.Execute(w, map[string]string{"Content": string(decryptedContent)})
 }
 
 func adminPasties(w http.ResponseWriter, r *http.Request) {
@@ -368,7 +357,7 @@ func regenerateAESKeyHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	newAESKey := GenerateRandomAESKey()
+	newAESKey := generateAESKey()
 	storeAESKey(newAESKey)
 	config.AESKey = newAESKey
 	appLogger.Info("Successfully regenerated and updated the AES key.")
@@ -386,59 +375,42 @@ func generateID() string {
 	return base64.URLEncoding.EncodeToString(b)
 }
 
-func encrypt(plainText, key string) (string, error) {
-	block, err := aes.NewCipher([]byte(key))
+func encrypt(plainText, key []byte) ([]byte, error) {
+	block, err := aes.NewCipher(key)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	cipherText := make([]byte, aes.BlockSize+len(plainText))
 	iv := cipherText[:aes.BlockSize]
 	if _, err := rand.Read(iv); err != nil {
-		return "", err
+		return nil, err
 	}
 	stream := cipher.NewCFBEncrypter(block, iv)
-	stream.XORKeyStream(cipherText[aes.BlockSize:], []byte(plainText))
-	return base64.StdEncoding.EncodeToString(cipherText), nil
+	stream.XORKeyStream(cipherText[aes.BlockSize:], plainText)
+	return cipherText, nil
 }
 
-func decrypt(cipherText, key string) (string, error) {
+func decrypt(cipherText, key []byte) ([]byte, error) {
 	if len(key) != 32 {
-		return "", errors.New("invalid key size; must be 32 bytes for AES-256 decryption")
+		return nil, errors.New("invalid key size; must be 32 bytes for AES-256 decryption")
 	}
 
-	cipherBytes, err := base64.StdEncoding.DecodeString(cipherText)
+	if len(cipherText) < aes.BlockSize {
+		return nil, errors.New("ciphertext too short; missing initialization vector (IV)")
+	}
+
+	iv := cipherText[:aes.BlockSize]
+	cipherText = cipherText[aes.BlockSize:]
+
+	block, err := aes.NewCipher(key)
 	if err != nil {
-		return "", fmt.Errorf("failed to decode cipherText: %w", err)
-	}
-
-	if len(cipherBytes) < aes.BlockSize {
-		return "", errors.New("ciphertext too short; missing initialization vector (IV)")
-	}
-
-	iv := cipherBytes[:aes.BlockSize]
-	cipherBytes = cipherBytes[aes.BlockSize:]
-
-	block, err := aes.NewCipher([]byte(key))
-	if err != nil {
-		return "", fmt.Errorf("failed to create AES cipher block: %w", err)
+		return nil, fmt.Errorf("failed to create AES cipher block: %w", err)
 	}
 
 	stream := cipher.NewCFBDecrypter(block, iv)
-	stream.XORKeyStream(cipherBytes, cipherBytes)
+	stream.XORKeyStream(cipherText, cipherText)
 
-	return string(cipherBytes), nil
-}
-
-func GenerateRandomAESKey() string {
-	key := make([]byte, 32)
-	for {
-		if _, err := rand.Read(key); err != nil {
-			appLogger.Warnf("Failed to generate AES key: %v. Retrying...", err)
-			continue
-		}
-		appLogger.Debugf("Successfully generated a 32-byte AES key: %s", base64.StdEncoding.EncodeToString(key))
-		return base64.StdEncoding.EncodeToString(key)
-	}
+	return cipherText, nil
 }
 
 func startExpiredPastiesCleanup(interval time.Duration) {
@@ -459,7 +431,6 @@ func startExpiredPastiesCleanup(interval time.Duration) {
 	}()
 }
 
-func validateAESKey(key string) bool {
-	decodedKey, err := base64.StdEncoding.DecodeString(key)
-	return err == nil && len(decodedKey) == 32
+func validateAESKey(key []byte) bool {
+	return len(key) == 32
 }
