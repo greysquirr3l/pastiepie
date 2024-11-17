@@ -319,13 +319,14 @@ func createPaste(w http.ResponseWriter, r *http.Request) {
 		Viewed:       false,
 	}
 
-	// Save the pastie in the background
-	go func() {
-		if err := db.WithContext(ctx).Create(&pastie).Error; err != nil {
-			appLogger.Errorf("Failed to save pastie: %v", err)
-		}
-	}()
+	// Save the pastie directly (remove the background goroutine)
+	if err := db.WithContext(ctx).Create(&pastie).Error; err != nil {
+		appLogger.Errorf("Failed to save pastie to database: %v", err)
+		renderErrorPage(w, "Failed to save pastie", http.StatusInternalServerError)
+		return
+	}
 
+	// Generate and render the share link
 	shareLink := fmt.Sprintf("http://%s/pastie/%s", r.Host, pastie.ID)
 	timeoutRemaining := formatDuration(expiration.Sub(time.Now().UTC()))
 
