@@ -282,18 +282,28 @@ func createPaste(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Parsing and validating expiration duration
 	viewOnce := r.FormValue("view_once") == "true"
-	expirationString := r.FormValue("expiration")
+	expirationStr := r.FormValue("expiration")
+
 	var expiration time.Time
-	if expirationString == "forever" {
-		expiration = time.Time{}
-	} else {
-		duration, err := time.ParseDuration(expirationString)
-		if err != nil {
-			renderErrorPage(w, "Invalid expiration duration", http.StatusBadRequest)
-			return
-		}
-		expiration = time.Now().Add(duration)
+	switch expirationStr {
+	case "5min":
+		expiration = time.Now().Add(5 * time.Minute)
+	case "30min":
+		expiration = time.Now().Add(30 * time.Minute)
+	case "1hour":
+		expiration = time.Now().Add(1 * time.Hour)
+	case "1day":
+		expiration = time.Now().Add(24 * time.Hour)
+	case "7days":
+		expiration = time.Now().Add(7 * 24 * time.Hour)
+	case "forever":
+		expiration = time.Time{} // Represents no expiration (forever)
+	default:
+		errorMsg := fmt.Sprintf("Invalid expiration duration received: %s", expirationStr)
+		renderErrorPage(w, errorMsg, http.StatusBadRequest)
+		return
 	}
 
 	password := r.FormValue("password")
@@ -307,8 +317,14 @@ func createPaste(w http.ResponseWriter, r *http.Request) {
 		passwordHash = string(hash)
 	}
 
+	// Sanitize content and encrypt it
 	sanitizedContent := html.EscapeString(content)
-	encryptedContent, err := cryptopasta.Encrypt([]byte(sanitizedContent), config.AESKey)
+
+	// Convert config.AESKey to a pointer to use with cryptopasta
+	aesKeyPtr := (*[32]byte)(config.AESKey[:])
+
+	// Encrypt content using cryptopasta
+	encryptedContent, err := cryptopasta.Encrypt([]byte(sanitizedContent), aesKeyPtr)
 	if err != nil {
 		appLogger.Errorf("Encryption failed: %v", err)
 		renderErrorPage(w, "Failed to encrypt content", http.StatusInternalServerError)
@@ -334,7 +350,12 @@ func createPaste(w http.ResponseWriter, r *http.Request) {
 
 	// Prepare data for the share_link template
 	shareLink := fmt.Sprintf("http://%s/pastie/%s", r.Host, pastie.ID)
-	timeoutRemaining := expiration.Sub(time.Now()).String() // Calculate the time remaining
+	var timeoutRemaining string
+	if expiration.IsZero() {
+		timeoutRemaining = "Never"
+	} else {
+		timeoutRemaining = fmt.Sprintf("%v", expiration.Sub(time.Now()).Round(time.Second))
+	}
 
 	data := map[string]interface{}{
 		"Link":              shareLink,

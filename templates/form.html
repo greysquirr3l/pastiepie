@@ -16,23 +16,42 @@
             min-height: 100vh;
             margin: 0;
         }
-        .container {
+        .form-container {
             background: #ffffff;
             border-radius: 10px;
             padding: 30px;
-            width: 90%;
-            max-width: 600px;
             box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+            width: 100%;
+            max-width: 800px;
             text-align: center;
         }
         .form-control {
             font-family: inherit;
         }
         .form-header {
+            display: flex;
+            align-items: center;
+            justify-content: center;
             margin-bottom: 20px;
         }
         .form-header img {
-            height: 100px;
+            height: 120px; /* Adjust to match larger size */
+        }
+        .form-header h1 {
+            font-size: 2rem;
+            margin: 0;
+        }
+        .form-group {
+            margin-bottom: 20px;
+        }
+        .options-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 15px;
+        }
+        .password-field {
+            margin-top: 15px;
         }
         .btn-create {
             background-color: #e8d8c3;
@@ -43,52 +62,73 @@
         .btn-create:hover {
             background-color: #d2c1ac;
         }
-        .form-group {
-            margin-bottom: 20px;
-        }
     </style>
 </head>
 <body>
     <div class="container">
-        <div class="form-header">
-            <img src="/static/images/logo.png" alt="Pastie Pie Logo">
+        <div class="form-container">
+            <div class="form-header">
+                <img src="/static/images/logo.png" alt="Pastie Pie Logo">
+            </div>
             <h1>Create a New Pastie</h1>
-        </div>
-        <form action="/pastie" method="POST">
-            <div class="form-group">
-                <label for="content" class="form-label">Enter your text here:</label>
-                <textarea id="content" name="content" class="form-control" rows="5" placeholder="Enter your text here..." required></textarea>
-            </div>
-
-            <div class="form-group">
-                <div class="form-check d-flex align-items-center justify-content-center">
-                    <input class="form-check-input me-2" type="checkbox" id="viewOnce" name="view_once" value="true">
-                    <label class="form-check-label" for="viewOnce">View Once</label>
+            <form action="/pastie" method="POST">
+                <!-- Textarea for the content -->
+                <div class="form-group">
+                    <label for="content" class="form-label">Enter your text here:</label>
+                    <textarea id="content" name="content" class="form-control" rows="5" placeholder="Enter your text here..." required></textarea>
                 </div>
-            </div>
 
-            <div class="form-group">
-                <label for="expiration" class="form-label">Expiration:</label>
-                <select id="expiration" name="expiration" class="form-select">
-                    <option value="5min">5 Minutes</option>
-                    <option value="30min">30 Minutes</option>
-                    <option value="1hour">1 Hour</option>
-                    <option value="1day">1 Day</option>
-                    <option value="7days">7 Days</option>
-                    <option value="forever">Forever</option>
-                </select>
-            </div>
+                <!-- Options for Expiration, View Once, and Password Protect -->
+                <div class="options-row">
+                    <!-- Expiration Dropdown on the left -->
+                    <div class="form-group">
+                        <label for="expiration" class="form-label">Expiration:</label>
+                        <select id="expiration" name="expiration" class="form-select">
+                            <option value="5min">5 Minutes</option>
+                            <option value="30min">30 Minutes</option>
+                            <option value="1hour">1 Hour</option>
+                            <option value="1day">1 Day</option>
+                            <option value="7days">7 Days</option>
+                            <option value="forever">Forever</option>
+                        </select>
+                    </div>
 
-            <div class="form-group">
-                <label for="password" class="form-label">Optional: Password Protect This Paste</label>
-                <input type="password" name="password" id="password" class="form-control">
-            </div>
+                    <!-- View Once Checkbox in the middle -->
+                    <div class="form-check">
+                        <input class="form-check-input" type="checkbox" id="viewOnce" name="view_once" value="true">
+                        <label class="form-check-label" for="viewOnce">View Once</label>
+                    </div>
 
-            <div class="form-group text-center">
-                <button type="submit" class="btn btn-create w-100">Create Pastie</button>
-            </div>
-        </form>
+                    <!-- Password Protect Checkbox on the right -->
+                    <div class="form-check">
+                        <input class="form-check-input" type="checkbox" id="passwordProtect" onclick="togglePasswordField()">
+                        <label class="form-check-label" for="passwordProtect">Password Protect</label>
+                    </div>
+                </div>
+
+                <!-- Password field, hidden by default -->
+                <div class="form-group password-field" id="passwordField" style="display: none;">
+                    <input type="password" name="password" id="password" class="form-control" placeholder="Optional: Password protect this paste">
+                </div>
+
+                <!-- Submit button -->
+                <div class="form-group text-center">
+                    <button type="submit" class="btn btn-create btn-lg w-100">Create Pastie</button>
+                </div>
+            </form>
+        </div>
     </div>
     <script src="/static/js/bootstrap.bundle.min.js"></script>
+    <script>
+        // Toggle the visibility of the password field
+        function togglePasswordField() {
+            const passwordField = document.getElementById("passwordField");
+            if (passwordField.style.display === "none") {
+                passwordField.style.display = "block";
+            } else {
+                passwordField.style.display = "none";
+            }
+        }
+    </script>
 </body>
 </html>
