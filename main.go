@@ -18,6 +18,7 @@ import (
 	"github.com/gorilla/handlers"
 	"github.com/gorilla/mux"
 	"github.com/gtank/cryptopasta"
+	"github.com/microcosm-cc/bluemonday"
 	"github.com/sirupsen/logrus"
 	"github.com/spf13/viper"
 	"golang.org/x/crypto/bcrypt"
@@ -353,6 +354,82 @@ func createPaste(w http.ResponseWriter, r *http.Request) {
 }
 
 // Get Paste Handler
+// func getPaste(w http.ResponseWriter, r *http.Request) {
+//	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+//	defer cancel()
+
+//	id := mux.Vars(r)["id"]
+
+//	var pastie Pastie
+//	if err := db.WithContext(ctx).First(&pastie, "id = ?", id).Error; err != nil {
+//		appLogger.Errorf("Failed to find pastie: %v", err)
+//		renderErrorPage(w, "Pastie not found", http.StatusNotFound)
+//		return
+//	}
+
+// Handle password-protected pastie
+//	if pastie.PasswordHash != "" && r.Method != http.MethodPost {
+//		tmpl, err := template.ParseFiles("templates/password_prompt.html")
+//		if err != nil {
+//			appLogger.Errorf("Failed to load password prompt template: %v", err)
+//			renderErrorPage(w, "Failed to load password prompt page", http.StatusInternalServerError)
+//			return
+//		}
+//		tmpl.Execute(w, map[string]string{"PastieID": id})
+//		return
+//	}
+
+// Validate the password if the pastie is password-protected
+//	if pastie.PasswordHash != "" {
+//		password := r.FormValue("password")
+//		if err := bcrypt.CompareHashAndPassword([]byte(pastie.PasswordHash), []byte(password)); err != nil {
+//			appLogger.Warnf("Password validation failed for pastie %s: %v", id, err)
+//			renderErrorPage(w, "Incorrect password", http.StatusUnauthorized)
+//			return
+//		}
+//	}
+
+// Decrypt content
+//	cipherBytes, err := base64.StdEncoding.DecodeString(pastie.Content)
+//	if err != nil {
+//		appLogger.Errorf("Failed to decode content for pastie %s: %v", id, err)
+//		renderErrorPage(w, "Failed to decode content", http.StatusInternalServerError)
+//		return
+//	}
+
+//	var aesKey [32]byte
+//	copy(aesKey[:], config.AESKey[:])
+
+//	decryptedContent, err := cryptopasta.Decrypt(cipherBytes, &aesKey)
+//	if err != nil {
+//		appLogger.Errorf("Failed to decrypt content for pastie %s: %v", id, err)
+//		renderErrorPage(w, "Failed to decrypt content", http.StatusInternalServerError)
+//		return
+//	}
+
+// Update the viewed status for pasties
+//	if !pastie.Viewed || pastie.ViewOnce {
+//		pastie.Viewed = true
+//		if pastie.ViewOnce {
+//			if err := db.WithContext(ctx).Delete(&pastie).Error; err != nil {
+//				appLogger.Errorf("Failed to delete one-time pastie %s: %v", id, err)
+//			}
+//		} else {
+//			if err := db.WithContext(ctx).Save(&pastie).Error; err != nil {
+//				appLogger.Errorf("Failed to update pastie %s as viewed: %v", id, err)
+//			}
+//		}
+//	}
+
+//	tmpl, err := template.ParseFiles("templates/view_pastie.html")
+//	if err != nil {
+//		renderErrorPage(w, "Error loading template", http.StatusInternalServerError)
+//		return
+//	}
+//	tmpl.Execute(w, map[string]string{"Content": string(decryptedContent)})
+//}
+
+// Get Paste Handler with Sanitization
 func getPaste(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
@@ -406,26 +483,20 @@ func getPaste(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Update the viewed status for pasties
-	if !pastie.Viewed || pastie.ViewOnce {
-		pastie.Viewed = true
-		if pastie.ViewOnce {
-			if err := db.WithContext(ctx).Delete(&pastie).Error; err != nil {
-				appLogger.Errorf("Failed to delete one-time pastie %s: %v", id, err)
-			}
-		} else {
-			if err := db.WithContext(ctx).Save(&pastie).Error; err != nil {
-				appLogger.Errorf("Failed to update pastie %s as viewed: %v", id, err)
-			}
-		}
-	}
+	// Sanitize the decrypted content using bluemonday
+	policy := bluemonday.UGCPolicy() // UGCPolicy allows basic HTML while removing unsafe content
+	sanitizedContent := policy.Sanitize(string(decryptedContent))
 
 	tmpl, err := template.ParseFiles("templates/view_pastie.html")
 	if err != nil {
 		renderErrorPage(w, "Error loading template", http.StatusInternalServerError)
 		return
 	}
-	tmpl.Execute(w, map[string]string{"Content": string(decryptedContent)})
+
+	// Render the sanitized content
+	tmpl.Execute(w, map[string]interface{}{
+		"Content": sanitizedContent,
+	})
 }
 
 // Admin Handler to View All Pasties
