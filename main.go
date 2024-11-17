@@ -441,11 +441,12 @@ func getPaste(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Update the viewed status for one-time view pasties
-	if pastie.ViewOnce {
+	// Update the viewed status for pasties
+	if !pastie.Viewed {
 		pastie.Viewed = true
 		if err := db.Save(&pastie).Error; err != nil {
 			appLogger.Errorf("Failed to update pastie as viewed: %v", err)
+			// Optionally, you could return an error page here if saving the viewed status is crucial
 		}
 	}
 
