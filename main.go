@@ -423,6 +423,13 @@ func getPaste(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Enforce one-time view pastie behavior
+	if pastie.ViewOnce && pastie.Viewed {
+		renderErrorPage(w, "This pastie has already been viewed and is no longer available", http.StatusGone)
+		return
+	}
+
+	// Decode the encrypted content
 	cipherBytes, err := base64.StdEncoding.DecodeString(pastie.Content)
 	if err != nil {
 		appLogger.Errorf("Failed to decode content: %v", err)
@@ -442,11 +449,18 @@ func getPaste(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Update the viewed status for pasties
-	if !pastie.Viewed {
+	if pastie.ViewOnce {
+		// Delete the pastie immediately after it is viewed
+		if err := db.Delete(&pastie).Error; err != nil {
+			appLogger.Errorf("Failed to delete pastie after one-time view: %v", err)
+			renderErrorPage(w, "Failed to delete pastie after viewing", http.StatusInternalServerError)
+			return
+		}
+	} else if !pastie.Viewed {
+		// Update viewed status for non one-time-view pasties
 		pastie.Viewed = true
 		if err := db.Save(&pastie).Error; err != nil {
 			appLogger.Errorf("Failed to update pastie as viewed: %v", err)
-			// Optionally, you could return an error page here if saving the viewed status is crucial
 		}
 	}
 
