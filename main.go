@@ -276,16 +276,25 @@ func createPaste(w http.ResponseWriter, r *http.Request) {
 
 	viewOnce := r.FormValue("view_once") == "true"
 	expirationString := r.FormValue("expiration")
+
 	var expiration time.Time
-	if expirationString == "forever" {
-		expiration = time.Time{}
-	} else {
-		duration, err := time.ParseDuration(expirationString)
-		if err != nil {
-			renderErrorPage(w, "Invalid expiration duration", http.StatusBadRequest)
-			return
-		}
-		expiration = time.Now().Add(duration)
+	// Parse expiration string from the form
+	switch expirationString {
+	case "5min":
+		expiration = time.Now().Add(5 * time.Minute)
+	case "30min":
+		expiration = time.Now().Add(30 * time.Minute)
+	case "1hour":
+		expiration = time.Now().Add(1 * time.Hour)
+	case "1day":
+		expiration = time.Now().Add(24 * time.Hour)
+	case "7days":
+		expiration = time.Now().Add(7 * 24 * time.Hour)
+	case "forever":
+		expiration = time.Time{} // Forever means no expiration time
+	default:
+		renderErrorPage(w, "Invalid expiration duration", http.StatusBadRequest)
+		return
 	}
 
 	password := r.FormValue("password")
@@ -326,12 +335,12 @@ func createPaste(w http.ResponseWriter, r *http.Request) {
 
 	// Prepare data for the share_link template
 	shareLink := fmt.Sprintf("http://%s/pastie/%s", r.Host, pastie.ID)
-	timeoutRemaining := expiration.Sub(time.Now())
+	timeoutRemaining := formatDuration(expiration.Sub(time.Now())) // Calculate the time remaining
 
 	data := map[string]interface{}{
 		"Link":              shareLink,
 		"PasswordProtected": password != "",
-		"TimeoutRemaining":  formatDuration(timeoutRemaining),
+		"TimeoutRemaining":  timeoutRemaining,
 		"ViewOnce":          viewOnce,
 	}
 
