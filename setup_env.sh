@@ -6,7 +6,7 @@ REQUIRED_VARS=("MASTER_KEY" "DB_PATH" "LOG_LEVEL" "PORT" "HTPASSWD")
 # Paths
 ENV_FILE="/root/.env"
 CONFIG_FILE="/root/config.yml"
-HTPASSWD_FILE="/root/nginx/.htpasswd"
+HTPASSWD_FILE="/etc/nginx/.htpasswd"
 
 # Create the .env file
 echo "# Temporary Environment Variables" > $ENV_FILE
