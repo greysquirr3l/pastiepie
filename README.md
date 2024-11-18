@@ -1,6 +1,6 @@
 # ![PastiePie Logo](https://pastiepie.me/static/images/logo_tp-min.png) PastiePie
 
-🚀 **PastiePie** is a simple and secure pastebin application written in Go. It allows users to paste content and receive a unique link to share it with others. PastiePie focuses on data security by storing pastes in an encrypted format using AES256.
+🚀 **PastiePie** is a simple and secure pastebin application written in Go. It allows users to paste content and receive a unique link to share it with others. PastiePie focuses on data security by storing pastes in an encrypted format using AES256.  It was co-written with the help of ChatGPT.
 
 ## 🌟 Features
 
