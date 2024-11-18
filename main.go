@@ -204,38 +204,63 @@ func storeAESKey(aesKey [32]byte, masterKey string) {
 
 // Start Expired Pasties Cleanup
 func startExpiredPastiesCleanup(interval time.Duration) {
-	appLogger.Infof("Starting expired pasties cleanup routine. Interval: %s", interval)
+	appLogger.Debugf("Starting expired pasties cleanup routine. Interval: %s", interval)
 
 	ticker := time.NewTicker(interval)
 
+	// Create a goroutine to handle the expired pasties cleanup periodically
 	go func() {
+		defer ticker.Stop() // Ensure ticker is stopped to avoid a resource leak
+
 		for range ticker.C {
-			appLogger.Info("Running cleanup for expired pasties...")
+			appLogger.Debug("Running cleanup for expired pasties...")
 
 			// Track counts of expired and view-once pasties
-			var expiredPastiesCount int64
-			var viewOncePastiesCount int64
+			var expiredPasties []Pastie
+			var viewOncePasties []Pastie
 
-			// Clean up expired pasties (pasties with an expiration time that has passed)
-			result := db.Where("expires_at <= ? AND expires_at != ?", time.Now().UTC(), time.Time{}).Delete(&Pastie{})
-			if result.Error != nil {
-				appLogger.Errorf("Failed to clean up expired pasties: %v", result.Error)
-			} else {
-				expiredPastiesCount = result.RowsAffected
-				appLogger.Infof("Expired pasties cleanup completed successfully. Removed %d expired pasties.", expiredPastiesCount)
+			// Find expired pasties (pasties with an expiration time that has passed and not set to "forever")
+			err := db.Where("expires_at <= ? AND expires_at != ?", time.Now().UTC(), time.Time{}).Find(&expiredPasties).Error
+			if err != nil {
+				appLogger.Errorf("Failed to find expired pasties: %v", err)
+				continue
+			}
+			expiredPastiesCount := len(expiredPasties)
+
+			// Find pasties marked as "view once" that have already been viewed
+			err = db.Where("view_once = ? AND viewed = ?", true, true).Find(&viewOncePasties).Error
+			if err != nil {
+				appLogger.Errorf("Failed to find 'view once' pasties: %v", err)
+				continue
+			}
+			viewOncePastiesCount := len(viewOncePasties)
+
+			// Log the counts of pasties found
+			appLogger.Debugf("Found %d expired pasties to delete.", expiredPastiesCount)
+			appLogger.Debugf("Found %d 'view once' pasties to delete.", viewOncePastiesCount)
+
+			// Delete expired pasties
+			if expiredPastiesCount > 0 {
+				err = db.Where("expires_at <= ? AND expires_at != ?", time.Now().UTC(), time.Time{}).Delete(&Pastie{}).Error
+				if err != nil {
+					appLogger.Errorf("Failed to delete expired pasties: %v", err)
+				} else {
+					appLogger.Debugf("Expired pasties cleanup completed successfully. Removed %d expired pasties.", expiredPastiesCount)
+				}
 			}
 
-			// Clean up pasties marked as "view once" that have already been viewed
-			result = db.Where("view_once = ? AND viewed = ?", true, true).Delete(&Pastie{})
-			if result.Error != nil {
-				appLogger.Errorf("Failed to clean up 'view once' pasties: %v", result.Error)
-			} else {
-				viewOncePastiesCount = result.RowsAffected
-				appLogger.Infof("'View once' pasties cleanup completed successfully. Removed %d 'view once' pasties.", viewOncePastiesCount)
+			// Delete 'view once' pasties that have been viewed
+			if viewOncePastiesCount > 0 {
+				err = db.Where("view_once = ? AND viewed = ?", true, true).Delete(&Pastie{}).Error
+				if err != nil {
+					appLogger.Errorf("Failed to delete 'view once' pasties: %v", err)
+				} else {
+					appLogger.Debugf("'View once' pasties cleanup completed successfully. Removed %d 'view once' pasties.", viewOncePastiesCount)
+				}
 			}
 
 			// Summary Log
-			appLogger.Infof("Cleanup Summary: %d expired pasties, %d 'view once' pasties removed.", expiredPastiesCount, viewOncePastiesCount)
+			appLogger.Debugf("Cleanup Summary: %d expired pasties, %d 'view once' pasties removed.", expiredPastiesCount, viewOncePastiesCount)
 		}
 	}()
 }
