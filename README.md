@@ -41,12 +41,11 @@
    - ~~`SSL_CERT`: Path to the SSL certificate.~~
    - ~~`SSL_KEY`: Path to the SSL key.~~
    - `MASTER_KEY`: 32-byte AES key for encryption.
+   - (other variables) ToFix
 
    Example:
    ```sh
-   export SSL_CERT="/path/to/cert.pem"
-   export SSL_KEY="/path/to/key.pem"
-   export AES_KEY="your-32-byte-aes-key"
+   export MASTER_KEY="your-32-byte-aes-key"
    ```
 
 3. **Build and Run with Docker**
@@ -67,7 +66,7 @@
 ## 🚀 Deploying on Railway
 
 1. Connect your GitHub repository to [Railway](https://railway.app/).
-2. Add the necessary environment variables (~~`SSL_CERT`~~, ~~`SSL_KEY`~~, `MASTER_KEY`) via Railway's environment settings.
+2. Add the necessary environment variables (`MASTER_KEY`, `other(tofix)`) via Railway's environment settings.
 3. Deploy the application by following the Railway deployment process.
 
 ## 📜 License
