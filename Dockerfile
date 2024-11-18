@@ -35,7 +35,6 @@ COPY --from=builder /app/static ./static
 
 # Copy configuration files
 COPY nginx/nginx.conf /etc/nginx/nginx.conf
-COPY nginx/.htpasswd /etc/nginx/.htpasswd
 COPY supervisord.conf /etc/supervisord.conf
 
 # Copy the helper script to set up environment variables

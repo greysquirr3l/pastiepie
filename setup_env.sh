@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Define required variables
-REQUIRED_VARS=("MASTER_KEY" "DB_PATH" "LOG_LEVEL" "PORT" "HTPASSWD")
+REQUIRED_VARS=("MASTER_KEY" "DB_PATH" "LOG_LEVEL" "PORT" "HTPASSWD" "ADMIN_USERNAME" "ADMIN_PASSWORD")
 
 # Paths
 ENV_FILE="/root/.env"
@@ -28,9 +28,11 @@ echo "DB_PATH value: $(printenv DB_PATH)"
 echo "Writing variables to $CONFIG_FILE..."
 cat <<EOL > $CONFIG_FILE
 log_level: "$(printenv LOG_LEVEL)"
-aes_key: "$(printenv MASTER_KEY)"
+master_key: "$(printenv MASTER_KEY)"
 db_path: "$(printenv DB_PATH)"
 port: "$(printenv PORT)"
+admin_username: "$(printenv ADMIN_USERNAME)"
+admin_password: "$(printenv ADMIN_PASSWORD)"
 EOL
 
 # Validate config.yml

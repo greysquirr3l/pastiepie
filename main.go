@@ -36,10 +36,12 @@ var (
 
 // Config struct to store global settings
 type Config struct {
-	LogLevel string
-	AESKey   [32]byte
-	DBPath   string
-	Port     string
+	LogLevel      string
+	AESKey        [32]byte
+	DBPath        string
+	Port          string
+	AdminUsername string
+	AdminPassword string
 }
 
 // AppConfig struct to store application-wide configurations in the database
@@ -225,15 +227,22 @@ func setupRouter() *mux.Router {
 	r.Use(rateLimitMiddleware)                     // Rate limiting middleware
 	r.Use(requestSizeLimitMiddleware(1024 * 1024)) // Limit request size to 1MB
 
+	// Public routes
 	r.HandleFunc("/", serveCreateForm).Methods("GET")
 	r.HandleFunc("/pastie", createPaste).Methods("POST")
 	r.HandleFunc("/pastie/{id}", getPaste).Methods("GET", "POST")
-	r.HandleFunc("/admin/pasties", adminPasties).Methods("GET")
-	r.HandleFunc("/admin/pasties/delete/{id}", deletePastieHandler).Methods("POST")
-	r.HandleFunc("/admin/pasties/delete-all", deleteAllPastiesHandler).Methods("POST")
 	r.HandleFunc("/healthz", healthCheck).Methods("GET")
-	r.HandleFunc("/admin/regenerate-aes-key", regenerateAESKeyHandler).Methods("POST")
+
+	// Admin routes - protected by basic authentication
+	adminSubrouter := r.PathPrefix("/admin").Subrouter()
+	adminSubrouter.Use(basicAuthMiddleware) // Protect admin routes
+	adminSubrouter.HandleFunc("/pasties", adminPasties).Methods("GET")
+	adminSubrouter.HandleFunc("/pasties/delete/{id}", deletePastieHandler).Methods("POST")
+	adminSubrouter.HandleFunc("/pasties/delete-all", deleteAllPastiesHandler).Methods("POST")
+	adminSubrouter.HandleFunc("/regenerate-aes-key", regenerateAESKeyHandler).Methods("POST")
+
 	r.PathPrefix("/static/").Handler(http.StripPrefix("/static/", http.FileServer(http.Dir("./static/"))))
+
 	return r
 }
 
@@ -502,6 +511,32 @@ func renderErrorPage(w http.ResponseWriter, message string, statusCode int) {
 	}
 }
 
+// Middleware for Basic Authentication
+func basicAuthMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		username, password, ok := r.BasicAuth()
+		if !ok {
+			unauthorized(w)
+			return
+		}
+
+		// Use credentials from the loaded configuration
+		if username != config.AdminUsername || password != config.AdminPassword {
+			unauthorized(w)
+			return
+		}
+
+		// If credentials are correct, proceed to the next handler
+		next.ServeHTTP(w, r)
+	})
+}
+
+// Helper function to write an Unauthorized response
+func unauthorized(w http.ResponseWriter) {
+	w.Header().Set("WWW-Authenticate", `Basic realm="Admin Area"`)
+	http.Error(w, "Unauthorized", http.StatusUnauthorized)
+}
+
 // Database Initialization
 func initDatabase() {
 	appLogger.Info("Initializing database...")
@@ -547,6 +582,8 @@ func initConfig(loadOnly bool) {
 	config.LogLevel = viper.GetString("log_level")
 	config.DBPath = viper.GetString("db_path")
 	config.Port = viper.GetString("port")
+	config.AdminUsername = viper.GetString("admin_username")
+	config.AdminPassword = viper.GetString("admin_password")
 
 	appLogger.Infof("Loaded configuration: LogLevel=%s, DBPath=%s, Port=%s", config.LogLevel, config.DBPath, config.Port)
 
