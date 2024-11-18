@@ -1,0 +1,11 @@
+---
+log_level: "info" #e.g., "debug", "info", "warn", "error")
+
+# AES encryption key from Railway environment variable
+aes_key: "${AES_KEY}"  # Environment variable for the encryption key
+
+# Database path from Railway environment variable
+db_path: "${DB_PATH}"  # Environment variable for the database file path
+
+ssl_cert_path: "./certs/server.crt"   # Path to the SSL certificate file
+ssl_key_path: "./certs/server.key"    # Path to the SSL key file

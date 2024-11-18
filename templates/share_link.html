@@ -3,11 +3,16 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<<<<<<< HEAD
+=======
+    <title>Share Pastie Link</title>
+>>>>>>> railway-secure
     <link rel="stylesheet" href="/static/css/bootstrap.min.css">
     <link href="https://fonts.googleapis.com/css2?family=Sour+Gummy&display=swap" rel="stylesheet">
     <style>
         body {
             font-family: 'Sour Gummy', sans-serif;
+<<<<<<< HEAD
         }
         .copy-link-container {
             position: relative;
@@ -59,6 +64,62 @@
             document.execCommand("copy");
 
             alert("Link copied to clipboard: " + copyText.value);
+=======
+            background-color: #f8f8f4;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+        }
+        .container {
+            background: #ffffff;
+            border-radius: 10px;
+            padding: 30px;
+            width: 90%;
+            max-width: 600px;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+            text-align: center;
+        }
+        #copySuccess {
+            display: none;
+            color: green;
+            font-weight: bold;
+            margin-top: 10px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <img src="/static/images/logo_tp-min.png" alt="Pastie Pie Logo" class="img-fluid mb-4">
+        <h1 class="mb-4">Share Your Pastie Link</h1>
+        <div class="input-group mb-3">
+            <input type="text" id="pastieLink" class="form-control" value="{{.Link}}" readonly onclick="this.select();">
+            <button class="btn btn-secondary" onclick="copyToClipboard()">Copy</button>
+        </div>
+        <div id="copySuccess">Link copied successfully!</div>
+        <ul class="list-unstyled text-start">
+            <li><strong>Password Protected:</strong> {{if .PasswordProtected}}Yes{{else}}No{{end}}</li>
+            <li><strong>Timeout:</strong> {{if eq .TimeoutRemaining "0s"}}Never{{else}}{{.TimeoutRemaining}}{{end}}</li>
+            {{if eq .ViewOnce true}}<li><strong>View Limit:</strong> One-time view only</li>{{end}}
+        </ul>
+    </div>
+    <script>
+        function copyToClipboard() {
+            const copyText = document.getElementById("pastieLink").value;
+            navigator.clipboard.writeText(copyText)
+                .then(() => {
+                    const copySuccess = document.getElementById("copySuccess");
+                    copySuccess.style.display = "block";
+
+                    // Hide the message after 2 seconds
+                    setTimeout(() => {
+                        copySuccess.style.display = "none";
+                    }, 2000);
+                })
+                .catch(err => {
+                    console.error('Could not copy text: ', err);
+                });
+>>>>>>> railway-secure
         }
     </script>
     <script src="/static/js/bootstrap.bundle.min.js"></script>

@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Error</title>
+    <link rel="stylesheet" href="/static/css/bootstrap.min.css">
+    <link href="https://fonts.googleapis.com/css2?family=Sour+Gummy&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Sour Gummy', sans-serif;
+            background-color: #f8f8f4;
+            margin: 0;
+            padding: 0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+        }
+        .container {
+            text-align: center;
+            background: #ffffff;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+            max-width: 600px;
+            width: 100%;
+        }
+        h1 {
+            font-size: 2.5rem;
+            color: #d9534f;
+            margin-bottom: 15px;
+        }
+        p {
+            font-size: 1.2rem;
+            margin-bottom: 15px;
+        }
+        .details {
+            margin-top: 20px;
+            color: #666;
+            font-size: 0.9rem;
+        }
+        .btn-home {
+            margin-top: 20px;
+            padding: 10px 20px;
+            font-size: 1rem;
+            border-radius: 5px;
+            background-color: #5bc0de;
+            color: white;
+            text-decoration: none;
+        }
+        .btn-home:hover {
+            background-color: #31b0d5;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Error <span id="status-code"></span></h1>
+        <p id="error-message">Oops! Something went wrong.</p>
+        <p class="details">
+            <strong>URL:</strong> <span id="current-url"></span><br>
+            <strong>Timestamp:</strong> <span id="timestamp"></span>
+        </p>
+        <a href="/" class="btn btn-home">Go to Home</a>
+    </div>
+
+    <script>
+        // Populate error details dynamically
+        document.getElementById("status-code").textContent = window.location.pathname.split("/")[1] || "Unknown";
+        document.getElementById("current-url").textContent = window.location.href;
+        document.getElementById("timestamp").textContent = new Date().toLocaleString();
+
+        // Customize the error message based on the status code
+        const statusCode = parseInt(window.location.pathname.split("/")[1], 10);
+        const errorMessage = document.getElementById("error-message");
+
+        switch (statusCode) {
+            case 404:
+                errorMessage.textContent = "The page you're looking for could not be found.";
+                break;
+            case 500:
+                errorMessage.textContent = "There was an internal server error. Please try again later.";
+                break;
+            case 403:
+                errorMessage.textContent = "You don't have permission to access this page.";
+                break;
+            default:
+                errorMessage.textContent = "An unexpected error occurred.";
+                break;
+        }
+    </script>
+    <script src="/static/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>

@@ -1,0 +1,20 @@
+version: '3.8'
+
+services:
+  pastiepie:
+    build: .
+    container_name: pastiepie_app
+    ports:
+      - "8081:8081"  # Map the internal port to the host
+    environment:
+      MASTER_KEY: "${MASTER_KEY}"  # 32-byte encryption key
+      DB_PATH: "/root/data"        # Path for database storage
+      LOG_LEVEL: "${LOG_LEVEL}"   # Log level (e.g., debug, info, warn)
+      PORT: "8081"                # Port for the application to bind
+    volumes:
+      - ./data:/root/data          # Persist database data across container restarts
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf  # Use custom NGINX config
+      - ./supervisord.conf:/etc/supervisord.conf  # Use Supervisor configuration
+      - ./templates:/root/templates               # Mount templates for dynamic rendering
+      - ./static:/root/static                     # Mount static files (CSS, JS, images)
+    restart: unless-stopped
