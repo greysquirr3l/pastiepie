@@ -1,11 +1,12 @@
 #!/bin/bash
 
 # Define required variables
-REQUIRED_VARS=("MASTER_KEY" "DB_PATH" "LOG_LEVEL" "PORT")
+REQUIRED_VARS=("MASTER_KEY" "DB_PATH" "LOG_LEVEL" "PORT" "HTPASSWD")
 
 # Paths
 ENV_FILE="/root/.env"
 CONFIG_FILE="/root/config.yml"
+HTPASSWD_FILE="/root/nginx/.htpasswd"
 
 # Create the .env file
 echo "# Temporary Environment Variables" > $ENV_FILE
@@ -36,6 +37,18 @@ EOL
 if ! grep -q "db_path: " $CONFIG_FILE; then
   echo "Error: db_path is missing or empty in $CONFIG_FILE."
   exit 1
+fi
+
+# Write HTPASSWD value to the .htpasswd file
+echo "Writing HTPASSWD value to $HTPASSWD_FILE..."
+HTPASSWD_VALUE=$(printenv HTPASSWD)
+echo "$HTPASSWD_VALUE" > $HTPASSWD_FILE
+
+if [ $? -ne 0 ]; then
+  echo "Error: Failed to write HTPASSWD value to $HTPASSWD_FILE."
+  exit 1
+else
+  echo "HTPASSWD value successfully written to $HTPASSWD_FILE."
 fi
 
 # Clear the .env file for security
