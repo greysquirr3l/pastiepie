@@ -1,6 +1,6 @@
-module pastiepie
+module main.go
 
-go 1.23
+go 1.23.3
 
 require (
 	github.com/glebarez/sqlite v1.11.0
@@ -10,8 +10,8 @@ require (
 	github.com/microcosm-cc/bluemonday v1.0.27
 	github.com/sirupsen/logrus v1.9.3
 	github.com/spf13/viper v1.19.0
-	golang.org/x/crypto v0.24.0
-	golang.org/x/time v0.5.0
+	golang.org/x/crypto v0.29.0
+	golang.org/x/time v0.8.0
 	gorm.io/gorm v1.25.12
 )
 
