@@ -306,8 +306,16 @@ func createPaste(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 
 	content := r.FormValue("content")
+
+	// Check if content is empty
 	if content == "" {
 		renderErrorPage(w, "Content cannot be empty", http.StatusBadRequest)
+		return
+	}
+
+	// Check if content exceeds character limit
+	if len(content) > maxPastieLength {
+		renderErrorPage(w, fmt.Sprintf("Content exceeds maximum allowed length of %d characters", maxPastieLength), http.StatusBadRequest)
 		return
 	}
 
