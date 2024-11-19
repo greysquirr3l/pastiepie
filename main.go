@@ -26,6 +26,10 @@ import (
 	"gorm.io/gorm"
 )
 
+const (
+	maxPastieLength = 5000 // Character limit for pasties
+)
+
 var (
 	db          *gorm.DB
 	configLock  sync.RWMutex
