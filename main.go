@@ -478,13 +478,23 @@ func getPaste(w http.ResponseWriter, r *http.Request) {
 	policy := bluemonday.UGCPolicy() // UGCPolicy allows basic HTML while removing unsafe content
 	sanitizedContent := policy.Sanitize(string(decryptedContent))
 
+	// Render the sanitized content
 	tmpl, err := template.ParseFiles("templates/view_pastie.html")
 	if err != nil {
 		renderErrorPage(w, "Error loading template", http.StatusInternalServerError)
 		return
 	}
 
-	// Render the sanitized content
+	// Delete one-time view pastie after successful decryption and rendering
+	if pastie.ViewOnce {
+		if err := db.WithContext(ctx).Delete(&pastie).Error; err != nil {
+			appLogger.Errorf("Failed to delete one-time view pastie %s: %v", id, err)
+			renderErrorPage(w, "Failed to delete pastie after viewing", http.StatusInternalServerError)
+			return
+		}
+		appLogger.Infof("One-time view pastie %s successfully deleted after viewing.", id)
+	}
+
 	tmpl.Execute(w, map[string]interface{}{
 		"Content": sanitizedContent,
 	})
